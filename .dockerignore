@@ -1,0 +1,16 @@
+node_modules
+.git
+dist
+**/dist
+**/node_modules
+*.log
+.env
+.env.*
+.DS_Store
+docs
+.github
+coverage
+.ui
+*.spec.ts
+*.spec.tsx
+**/__tests__
