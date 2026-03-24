@@ -53,16 +53,26 @@ export interface ContractSearchResult {
 
 // ==================== AccountManager ====================
 
+export interface SnapshotHooks {
+  onPostPush?: (accountId: string) => void | Promise<void>
+  onPostReject?: (accountId: string) => void | Promise<void>
+}
+
 export class AccountManager {
   private entries = new Map<string, UnifiedTradingAccount>()
   private reconnecting = new Set<string>()
 
   private eventLog?: EventLog
   private toolCenter?: ToolCenter
+  private _snapshotHooks?: SnapshotHooks
 
   constructor(deps?: { eventLog: EventLog; toolCenter: ToolCenter }) {
     this.eventLog = deps?.eventLog
     this.toolCenter = deps?.toolCenter
+  }
+
+  setSnapshotHooks(hooks: SnapshotHooks): void {
+    this._snapshotHooks = hooks
   }
 
   // ==================== Lifecycle ====================
@@ -78,6 +88,8 @@ export class AccountManager {
       onHealthChange: (accountId, health) => {
         this.eventLog?.append('account.health', { accountId, ...health })
       },
+      onPostPush: this._snapshotHooks?.onPostPush,
+      onPostReject: this._snapshotHooks?.onPostReject,
     })
     this.add(uta)
     return uta

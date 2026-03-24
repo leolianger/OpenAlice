@@ -58,6 +58,8 @@ export interface UnifiedTradingAccountOptions {
   savedState?: GitExportState
   onCommit?: (state: GitExportState) => void | Promise<void>
   onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
+  onPostPush?: (accountId: string) => void | Promise<void>
+  onPostReject?: (accountId: string) => void | Promise<void>
 }
 
 // ==================== Stage param types ====================
@@ -108,6 +110,8 @@ export class UnifiedTradingAccount {
 
   private readonly _getState: () => Promise<GitState>
   private readonly _onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
+  private readonly _onPostPush?: (accountId: string) => void | Promise<void>
+  private readonly _onPostReject?: (accountId: string) => void | Promise<void>
 
   // ---- Health tracking ----
   private static readonly DEGRADED_THRESHOLD = 3
@@ -129,6 +133,8 @@ export class UnifiedTradingAccount {
     this.id = broker.id
     this.label = broker.label
     this._onHealthChange = options.onHealthChange
+    this._onPostPush = options.onPostPush
+    this._onPostReject = options.onPostReject
 
     // Wire internals
     this._getState = async (): Promise<GitState> => {
@@ -423,11 +429,15 @@ export class UnifiedTradingAccount {
     if (this.health === 'offline') {
       throw new Error(`Account "${this.label}" is offline. Cannot execute trades.`)
     }
-    return this.git.push()
+    const result = await this.git.push()
+    Promise.resolve(this._onPostPush?.(this.id)).catch(() => {})
+    return result
   }
 
-  reject(reason?: string): Promise<RejectResult> {
-    return this.git.reject(reason)
+  async reject(reason?: string): Promise<RejectResult> {
+    const result = await this.git.reject(reason)
+    Promise.resolve(this._onPostReject?.(this.id)).catch(() => {})
+    return result
   }
 
   // ==================== Git queries ====================

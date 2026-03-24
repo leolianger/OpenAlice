@@ -11,6 +11,7 @@ export type {
   AccountSummary,
   AggregatedEquity,
   ContractSearchResult,
+  SnapshotHooks,
 } from './account-manager.js'
 
 // Brokers (types + implementations + factory)
@@ -56,6 +57,22 @@ export type {
   PriceChangeInput,
   SimulatePriceChangeResult,
 } from './git/index.js'
+
+// Snapshots
+export {
+  createSnapshotService,
+  createSnapshotScheduler,
+  createSnapshotStore,
+  buildSnapshot,
+} from './snapshot/index.js'
+export type {
+  SnapshotService,
+  SnapshotScheduler,
+  SnapshotStore,
+  UTASnapshot,
+  SnapshotTrigger,
+  SnapshotIndex,
+} from './snapshot/index.js'
 
 // Guards
 export {

@@ -8,7 +8,7 @@ import { TelegramPlugin } from './connectors/telegram/index.js'
 import { WebPlugin } from './connectors/web/index.js'
 import { McpAskPlugin } from './connectors/mcp-ask/index.js'
 import { createThinkingTools } from './tool/thinking.js'
-import { AccountManager } from './domain/trading/index.js'
+import { AccountManager, createSnapshotService, createSnapshotScheduler } from './domain/trading/index.js'
 import { createTradingTools } from './tool/trading.js'
 import { Brain } from './domain/brain/index.js'
 import { createBrainTools } from './tool/brain.js'
@@ -83,6 +83,14 @@ async function main() {
     await accountManager.initAccount(accCfg)
   }
   accountManager.registerCcxtToolsIfNeeded()
+
+  // ==================== Snapshot ====================
+
+  const snapshotService = createSnapshotService({ accountManager, eventLog })
+  accountManager.setSnapshotHooks({
+    onPostPush: (id) => { snapshotService.takeSnapshot(id, 'post-push') },
+    onPostReject: (id) => { snapshotService.takeSnapshot(id, 'post-reject') },
+  })
 
   // ==================== Brain ====================
 
@@ -217,6 +225,12 @@ async function main() {
   const cronListener = createCronListener({ connectorCenter, eventLog, agentCenter, session: cronSession })
   cronListener.start()
   console.log('cron: engine + listener started')
+
+  // ==================== Snapshot Scheduler ====================
+
+  const snapshotScheduler = createSnapshotScheduler({ snapshotService, cronEngine, eventLog })
+  await snapshotScheduler.start()
+  console.log('snapshot: scheduler started (every 15m)')
 
   // ==================== Heartbeat ====================
 
@@ -374,6 +388,7 @@ async function main() {
   const shutdown = async () => {
     stopped = true
     newsCollector?.stop()
+    snapshotScheduler.stop()
     heartbeat.stop()
     cronListener.stop()
     cronEngine.stop()

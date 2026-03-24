@@ -289,6 +289,7 @@ export class TradingGit implements ITradingGit {
     return {
       staged: [...this.stagingArea],
       pendingMessage: this.pendingMessage,
+      pendingHash: this.pendingHash,
       head: this.head,
       commitCount: this.commits.length,
     }

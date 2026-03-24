@@ -100,6 +100,7 @@ export interface RejectResult {
 export interface GitStatus {
   staged: Operation[]
   pendingMessage: string | null
+  pendingHash: CommitHash | null
   head: CommitHash | null
   commitCount: number
 }
