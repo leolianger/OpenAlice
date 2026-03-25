@@ -341,21 +341,24 @@ describe('Snapshot Service', () => {
   let manager: AccountManager
   let eventLog: EventLog
   let service: SnapshotService
+  let serviceDir: string
 
   beforeEach(async () => {
     manager = new AccountManager()
     const logPath = tempPath('jsonl')
     eventLog = await createEventLog({ logPath })
+    serviceDir = tempDir()
 
     const broker = new MockBroker({ id: 'acc1', label: 'Test' })
     const uta = new UnifiedTradingAccount(broker)
     manager.add(uta)
 
-    service = createSnapshotService({ accountManager: manager, eventLog })
+    service = createSnapshotService({ accountManager: manager, eventLog, baseDir: serviceDir })
   })
 
   afterEach(async () => {
     await eventLog._resetForTest()
+    await rm(serviceDir, { recursive: true, force: true })
   })
 
   // #20

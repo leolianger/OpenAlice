@@ -26,14 +26,16 @@ export interface SnapshotService {
 export function createSnapshotService(deps: {
   accountManager: AccountManager
   eventLog?: EventLog
+  /** Override storage base directory (tests use tmpdir). */
+  baseDir?: string
 }): SnapshotService {
-  const { accountManager, eventLog } = deps
+  const { accountManager, eventLog, baseDir } = deps
   const stores = new Map<string, SnapshotStore>()
 
   function getStore(accountId: string): SnapshotStore {
     let s = stores.get(accountId)
     if (!s) {
-      s = createSnapshotStore(accountId)
+      s = createSnapshotStore(accountId, baseDir ? { baseDir } : undefined)
       stores.set(accountId, s)
     }
     return s
