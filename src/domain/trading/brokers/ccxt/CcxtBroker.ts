@@ -33,6 +33,12 @@ import {
   marketToContract,
   contractToCcxt,
 } from './ccxt-contracts.js'
+import {
+  type CcxtExchangeOverrides,
+  exchangeOverrides,
+  defaultFetchOrderById,
+  defaultCancelOrderById,
+} from './overrides.js'
 
 /** Map IBKR orderType codes to CCXT order type strings. */
 function ibkrOrderTypeToCcxt(orderType: string): string {
@@ -96,12 +102,14 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   private exchange: Exchange
   private exchangeName: string
   private initialized = false
+  private overrides: CcxtExchangeOverrides
   // orderId → ccxtSymbol cache (CCXT needs symbol to cancel)
   private orderSymbolCache = new Map<string, string>()
 
   constructor(config: CcxtBrokerConfig) {
     this.exchangeName = config.exchange
     this.meta = { exchange: config.exchange }
+    this.overrides = exchangeOverrides[config.exchange] ?? {}
     this.id = config.id ?? `${config.exchange}-main`
     this.label = config.label ?? `${config.exchange.charAt(0).toUpperCase() + config.exchange.slice(1)} ${config.sandbox ? 'Testnet' : 'Live'}`
 
@@ -336,23 +344,14 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   async cancelOrder(orderId: string): Promise<PlaceOrderResult> {
     this.ensureInit()
 
-    const ccxtSymbol = this.orderSymbolCache.get(orderId)
-    // Try regular cancel first, then conditional order cancel.
     try {
-      await this.exchange.cancelOrder(orderId, ccxtSymbol)
+      const ccxtSymbol = this.orderSymbolCache.get(orderId)
+      const cancel = this.overrides.cancelOrderById ?? defaultCancelOrderById
+      await cancel(this.exchange, orderId, ccxtSymbol)
       const orderState = new OrderState()
       orderState.status = 'Cancelled'
       return { success: true, orderId, orderState }
     } catch (err) {
-      // If regular cancel failed and we have a symbol, try as conditional order
-      if (ccxtSymbol) {
-        try {
-          await this.exchange.cancelOrder(orderId, ccxtSymbol, { stop: true })
-          const orderState = new OrderState()
-          orderState.status = 'Cancelled'
-          return { success: true, orderId, orderState }
-        } catch { /* fall through to original error */ }
-      }
       return { success: false, error: err instanceof Error ? err.message : String(err) }
     }
   }
@@ -367,13 +366,8 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       }
 
       // editOrder requires type and side — fetch the original order to fill in defaults.
-      // Try regular order first, then conditional.
-      let original: CcxtOrder
-      try {
-        original = await this.exchange.fetchOrder(orderId, ccxtSymbol)
-      } catch {
-        original = await this.exchange.fetchOrder(orderId, ccxtSymbol, { stop: true })
-      }
+      const fetch = this.overrides.fetchOrderById ?? defaultFetchOrderById
+      const original = await fetch(this.exchange, orderId, ccxtSymbol)
       const qty = changes.totalQuantity != null && !changes.totalQuantity.equals(UNSET_DECIMAL) ? parseFloat(changes.totalQuantity.toString()) : original.amount
       const price = changes.lmtPrice !== UNSET_DOUBLE ? changes.lmtPrice : original.price
 
@@ -531,18 +525,13 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     const ccxtSymbol = this.orderSymbolCache.get(orderId)
     if (!ccxtSymbol) return null
 
-    // Try regular order first, then conditional/trigger order.
-    // Conditional orders (stop-loss, take-profit) live on separate exchange
-    // endpoints and require { stop: true } to be visible.
+    const fetch = this.overrides.fetchOrderById ?? defaultFetchOrderById
     try {
-      const order = await this.exchange.fetchOrder(orderId, ccxtSymbol)
+      const order = await fetch(this.exchange, orderId, ccxtSymbol)
       return this.convertCcxtOrder(order)
-    } catch { /* not a regular order */ }
-    try {
-      const order = await this.exchange.fetchOrder(orderId, ccxtSymbol, { stop: true })
-      return this.convertCcxtOrder(order)
-    } catch { /* not found */ }
-    return null
+    } catch {
+      return null
+    }
   }
 
   private convertCcxtOrder(o: CcxtOrder): OpenOrder | null {
