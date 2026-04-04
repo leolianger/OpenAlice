@@ -4,31 +4,35 @@
  * Maps to openTypeBB etf-router endpoints.
  */
 
+import type {
+  EtfSearchData, EtfInfoData, EtfHoldingsData,
+  EtfSectorsData, EtfCountriesData, EtfEquityExposureData,
+} from '@traderalice/opentypebb'
 import { SDKBaseClient } from './base-client.js'
 
 export class SDKEtfClient extends SDKBaseClient {
   async search(params: Record<string, unknown>) {
-    return this.request('/search', params)
+    return this.request<EtfSearchData>('/search', params)
   }
 
   async getInfo(params: Record<string, unknown>) {
-    return this.request('/info', params)
+    return this.request<EtfInfoData>('/info', params)
   }
 
   async getHoldings(params: Record<string, unknown>) {
-    return this.request('/holdings', params)
+    return this.request<EtfHoldingsData>('/holdings', params)
   }
 
   async getSectors(params: Record<string, unknown>) {
-    return this.request('/sectors', params)
+    return this.request<EtfSectorsData>('/sectors', params)
   }
 
   async getCountries(params: Record<string, unknown>) {
-    return this.request('/countries', params)
+    return this.request<EtfCountriesData>('/countries', params)
   }
 
   async getEquityExposure(params: Record<string, unknown>) {
-    return this.request('/equity_exposure', params)
+    return this.request<EtfEquityExposureData>('/equity_exposure', params)
   }
 
   async getHistorical(params: Record<string, unknown>) {

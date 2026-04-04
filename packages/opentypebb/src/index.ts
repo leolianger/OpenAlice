@@ -43,6 +43,9 @@ export { createRegistry, createExecutor, loadAllRouters } from './core/api/app-l
 export { buildWidgetsJson } from './core/api/widgets.js'
 export { mountWidgetsEndpoint } from './core/api/rest-api.js'
 
+// Standard models — data types for all asset classes
+export * from './standard-models/index.js'
+
 // Pre-built providers (for direct import if needed)
 export { fmpProvider } from './providers/fmp/index.js'
 export { yfinanceProvider } from './providers/yfinance/index.js'

@@ -7,6 +7,7 @@
 
 import type { OBBjectResponse } from '../../currency/types/index'
 import { buildCredentialsHeader } from '../../credential-map'
+import type { CurrencyHistoricalData } from '@traderalice/opentypebb'
 
 export class OpenBBCurrencyClient {
   private baseUrl: string
@@ -22,7 +23,7 @@ export class OpenBBCurrencyClient {
   // ==================== Price ====================
 
   async getHistorical(params: Record<string, unknown>) {
-    return this.request('/price/historical', params)
+    return this.request<CurrencyHistoricalData>('/price/historical', params)
   }
 
   // ==================== Search ====================

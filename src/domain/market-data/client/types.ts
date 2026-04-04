@@ -1,65 +1,86 @@
 /**
- * Duck-typed interfaces for OpenBB clients.
+ * Typed interfaces for market-data clients.
  *
  * Both the HTTP clients (OpenBBEquityClient etc.) and SDK clients (SDKEquityClient etc.)
  * satisfy these interfaces, allowing adapters to accept either implementation.
+ *
+ * Return types come from openTypeBB standard models.
  */
 
+import type {
+  // Equity
+  EquitySearchData, EquityHistoricalData, EquityInfoData, KeyMetricsData,
+  IncomeStatementData, BalanceSheetData, CashFlowStatementData, FinancialRatiosData,
+  PriceTargetConsensusData, CalendarEarningsData, InsiderTradingData, EquityDiscoveryData,
+  // Crypto
+  CryptoSearchData, CryptoHistoricalData,
+  // Currency
+  CurrencyHistoricalData, CurrencySnapshotsData,
+  // ETF
+  EtfSearchData, EtfInfoData, EtfHoldingsData, EtfSectorsData,
+  EtfCountriesData, EtfEquityExposureData,
+  // Index
+  AvailableIndicesData, IndexSearchData, IndexConstituentsData, IndexHistoricalData,
+  IndexSectorsData, SP500MultiplesData, RiskPremiumData,
+  // Derivatives
+  FuturesHistoricalData, FuturesCurveData, FuturesInfoData, FuturesInstrumentsData,
+  OptionsChainsData, OptionsSnapshotsData, OptionsUnusualData,
+} from '@traderalice/opentypebb'
+
 export interface EquityClientLike {
-  search(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getHistorical(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getProfile(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getKeyMetrics(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getIncomeStatement(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getBalanceSheet(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getCashFlow(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getFinancialRatios(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getEstimateConsensus(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getCalendarEarnings(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getInsiderTrading(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getGainers(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getLosers(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getActive(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  search(params: Record<string, unknown>): Promise<EquitySearchData[]>
+  getHistorical(params: Record<string, unknown>): Promise<EquityHistoricalData[]>
+  getProfile(params: Record<string, unknown>): Promise<EquityInfoData[]>
+  getKeyMetrics(params: Record<string, unknown>): Promise<KeyMetricsData[]>
+  getIncomeStatement(params: Record<string, unknown>): Promise<IncomeStatementData[]>
+  getBalanceSheet(params: Record<string, unknown>): Promise<BalanceSheetData[]>
+  getCashFlow(params: Record<string, unknown>): Promise<CashFlowStatementData[]>
+  getFinancialRatios(params: Record<string, unknown>): Promise<FinancialRatiosData[]>
+  getEstimateConsensus(params: Record<string, unknown>): Promise<PriceTargetConsensusData[]>
+  getCalendarEarnings(params?: Record<string, unknown>): Promise<CalendarEarningsData[]>
+  getInsiderTrading(params: Record<string, unknown>): Promise<InsiderTradingData[]>
+  getGainers(params?: Record<string, unknown>): Promise<EquityDiscoveryData[]>
+  getLosers(params?: Record<string, unknown>): Promise<EquityDiscoveryData[]>
+  getActive(params?: Record<string, unknown>): Promise<EquityDiscoveryData[]>
 }
 
 export interface CryptoClientLike {
-  search(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getHistorical(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  search(params: Record<string, unknown>): Promise<CryptoSearchData[]>
+  getHistorical(params: Record<string, unknown>): Promise<CryptoHistoricalData[]>
 }
 
 export interface CurrencyClientLike {
   search(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getHistorical(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getHistorical(params: Record<string, unknown>): Promise<CurrencyHistoricalData[]>
 }
 
 export interface EtfClientLike {
-  search(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getInfo(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getHoldings(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getSectors(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getCountries(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getEquityExposure(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  search(params: Record<string, unknown>): Promise<EtfSearchData[]>
+  getInfo(params: Record<string, unknown>): Promise<EtfInfoData[]>
+  getHoldings(params: Record<string, unknown>): Promise<EtfHoldingsData[]>
+  getSectors(params: Record<string, unknown>): Promise<EtfSectorsData[]>
+  getCountries(params: Record<string, unknown>): Promise<EtfCountriesData[]>
+  getEquityExposure(params: Record<string, unknown>): Promise<EtfEquityExposureData[]>
   getHistorical(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
 }
 
 export interface IndexClientLike {
-  getAvailable(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  search(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getConstituents(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getHistorical(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getAvailable(params?: Record<string, unknown>): Promise<AvailableIndicesData[]>
+  search(params: Record<string, unknown>): Promise<IndexSearchData[]>
+  getConstituents(params: Record<string, unknown>): Promise<IndexConstituentsData[]>
+  getHistorical(params: Record<string, unknown>): Promise<IndexHistoricalData[]>
   getSnapshots(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getSectors(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getSP500Multiples(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getRiskPremium(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getSectors(params: Record<string, unknown>): Promise<IndexSectorsData[]>
+  getSP500Multiples(params?: Record<string, unknown>): Promise<SP500MultiplesData[]>
+  getRiskPremium(params?: Record<string, unknown>): Promise<RiskPremiumData[]>
 }
 
 export interface DerivativesClientLike {
-  getFuturesHistorical(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getFuturesCurve(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getFuturesInfo(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getFuturesInstruments(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getOptionsChains(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getOptionsSnapshots(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
-  getOptionsUnusual(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getFuturesHistorical(params: Record<string, unknown>): Promise<FuturesHistoricalData[]>
+  getFuturesCurve(params: Record<string, unknown>): Promise<FuturesCurveData[]>
+  getFuturesInfo(params: Record<string, unknown>): Promise<FuturesInfoData[]>
+  getFuturesInstruments(params?: Record<string, unknown>): Promise<FuturesInstrumentsData[]>
+  getOptionsChains(params: Record<string, unknown>): Promise<OptionsChainsData[]>
+  getOptionsSnapshots(params?: Record<string, unknown>): Promise<OptionsSnapshotsData[]>
+  getOptionsUnusual(params?: Record<string, unknown>): Promise<OptionsUnusualData[]>
 }
-
