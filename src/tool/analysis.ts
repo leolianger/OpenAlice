@@ -10,7 +10,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 import type { EquityClientLike, CryptoClientLike, CurrencyClientLike, CommodityClientLike } from '@/domain/market-data/client/types'
 import { IndicatorCalculator } from '@/domain/analysis/indicator/calculator'
-import type { IndicatorContext, OhlcvData } from '@/domain/analysis/indicator/types'
+import type { IndicatorContext, OhlcvData, HistoricalDataResult, DataSourceMeta } from '@/domain/analysis/indicator/types'
 
 /** 根据 interval 决定拉取的日历天数（约 1 倍冗余） */
 function getCalendarDays(interval: string): number {
@@ -44,7 +44,7 @@ function buildContext(
   commodityClient: CommodityClientLike,
 ): IndicatorContext {
   return {
-    getHistoricalData: async (symbol, interval) => {
+    getHistoricalData: async (symbol, interval): Promise<HistoricalDataResult> => {
       const start_date = buildStartDate(interval)
 
       let raw: Array<Record<string, unknown>>
@@ -64,13 +64,21 @@ function buildContext(
       }
 
       // Filter out bars with null OHLC (yfinance returns null for incomplete/missing data)
-      const results = raw.filter(
+      const data = raw.filter(
         (d): d is Record<string, unknown> & OhlcvData =>
           d.close != null && d.open != null && d.high != null && d.low != null,
       ) as OhlcvData[]
 
-      results.sort((a, b) => a.date.localeCompare(b.date))
-      return results
+      data.sort((a, b) => a.date.localeCompare(b.date))
+
+      const meta: DataSourceMeta = {
+        symbol,
+        from: data.length > 0 ? data[0].date : '',
+        to: data.length > 0 ? data[data.length - 1].date : '',
+        bars: data.length,
+      }
+
+      return { data, meta }
     },
   }
 }
