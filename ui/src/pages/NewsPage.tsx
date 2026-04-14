@@ -333,6 +333,11 @@ function FeedsSection({
 
 type Tab = 'feed' | 'settings'
 
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'feed', label: 'Feed' },
+  { key: 'settings', label: 'Settings' },
+]
+
 export function NewsPage() {
   const [tab, setTab] = useState<Tab>('feed')
 
@@ -341,31 +346,26 @@ export function NewsPage() {
       <PageHeader
         title="News"
         description="RSS feed collection and article archive."
-        right={
-          <div className="flex gap-1 bg-bg-secondary rounded-lg p-1">
-            <button
-              onClick={() => setTab('feed')}
-              className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-                tab === 'feed'
-                  ? 'bg-bg-tertiary text-text'
-                  : 'text-text-muted hover:text-text'
-              }`}
-            >
-              Feed
-            </button>
-            <button
-              onClick={() => setTab('settings')}
-              className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-                tab === 'settings'
-                  ? 'bg-bg-tertiary text-text'
-                  : 'text-text-muted hover:text-text'
-              }`}
-            >
-              Settings
-            </button>
-          </div>
-        }
       />
+
+      <div className="px-4 md:px-6 border-b border-border/60">
+        <div className="flex gap-1">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-3 py-2 text-sm font-medium transition-colors relative ${
+                tab === t.key ? 'text-accent' : 'text-text-muted hover:text-text'
+              }`}
+            >
+              {t.label}
+              {tab === t.key && (
+                <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent rounded-t" />
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="flex-1 flex flex-col min-h-0 px-4 md:px-6 py-5">
         <div className="flex-1 min-h-0">

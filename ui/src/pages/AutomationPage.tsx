@@ -284,6 +284,13 @@ function HeartbeatSection() {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-[880px] mx-auto space-y-6">
+        <div className="rounded-lg border border-border/50 bg-bg-secondary/50 px-4 py-3">
+          <p className="text-[13px] text-text-muted leading-relaxed">
+            Heartbeat is a periodic self-check that runs as an internal cron job on the event bus.
+            When fired, Alice reviews current state and decides whether to notify you.
+            Configure the interval, active hours, and prompt below.
+          </p>
+        </div>
         <StatusBar />
         {config && <HeartbeatConfigForm config={config} />}
         <PromptEditor />
@@ -359,6 +366,13 @@ function CronSection() {
 
   return (
     <div className="flex flex-col gap-3">
+      <div className="rounded-lg border border-border/50 bg-bg-secondary/50 px-4 py-3">
+        <p className="text-[13px] text-text-muted leading-relaxed">
+          Cron jobs fire events on the dispatch bus at scheduled intervals.
+          Each job's payload is sent to Alice as a prompt — use them for periodic checks, reports, or any recurring task.
+          Internal jobs (heartbeat, snapshot) are managed by their own tabs.
+        </p>
+      </div>
       {error && <div className="text-xs text-red">{error}</div>}
       <div className="flex items-center justify-between">
         <span className="text-xs text-text-muted">{jobs.length} jobs</span>
@@ -584,39 +598,39 @@ function AddCronJobForm({ onClose, onCreated }: { onClose: () => void; onCreated
 
 type Tab = 'heartbeat' | 'cron'
 
-export function SchedulerPage() {
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'heartbeat', label: 'Heartbeat' },
+  { key: 'cron', label: 'Cron Jobs' },
+]
+
+export function AutomationPage() {
   const [tab, setTab] = useState<Tab>('heartbeat')
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <PageHeader
-        title="Scheduler"
-        description="Event-driven dispatch bus — heartbeat and cron jobs."
-        right={
-          <div className="flex gap-1 bg-bg-secondary rounded-lg p-1">
-            <button
-              onClick={() => setTab('heartbeat')}
-              className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-                tab === 'heartbeat'
-                  ? 'bg-bg-tertiary text-text'
-                  : 'text-text-muted hover:text-text'
-              }`}
-            >
-              Heartbeat
-            </button>
-            <button
-              onClick={() => setTab('cron')}
-              className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-                tab === 'cron'
-                  ? 'bg-bg-tertiary text-text'
-                  : 'text-text-muted hover:text-text'
-              }`}
-            >
-              Cron Jobs
-            </button>
-          </div>
-        }
+        title="Automation"
+        description="Automated tasks — heartbeat, cron jobs, and scheduled actions."
       />
+
+      <div className="px-4 md:px-6 border-b border-border/60">
+        <div className="flex gap-1">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-3 py-2 text-sm font-medium transition-colors relative ${
+                tab === t.key ? 'text-accent' : 'text-text-muted hover:text-text'
+              }`}
+            >
+              {t.label}
+              {tab === t.key && (
+                <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent rounded-t" />
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="flex-1 flex flex-col min-h-0 px-4 md:px-6 py-5">
         <div className="flex-1 min-h-0">

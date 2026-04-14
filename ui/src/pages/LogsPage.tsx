@@ -486,38 +486,36 @@ function ToolCallRow({ record }: { record: ToolCallRecord }) {
 
 type Tab = 'events' | 'tools'
 
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'events', label: 'Events' },
+  { key: 'tools', label: 'Tool Calls' },
+]
+
 export function LogsPage() {
   const [tab, setTab] = useState<Tab>('events')
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <PageHeader
-        title="Logs"
-        right={
-          <div className="flex gap-1 bg-bg-secondary rounded-lg p-1">
+      <PageHeader title="Logs" />
+
+      <div className="px-4 md:px-6 border-b border-border/60">
+        <div className="flex gap-1">
+          {TABS.map((t) => (
             <button
-              onClick={() => setTab('events')}
-              className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-                tab === 'events'
-                  ? 'bg-bg-tertiary text-text'
-                  : 'text-text-muted hover:text-text'
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-3 py-2 text-sm font-medium transition-colors relative ${
+                tab === t.key ? 'text-accent' : 'text-text-muted hover:text-text'
               }`}
             >
-              Events
+              {t.label}
+              {tab === t.key && (
+                <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent rounded-t" />
+              )}
             </button>
-            <button
-              onClick={() => setTab('tools')}
-              className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-                tab === 'tools'
-                  ? 'bg-bg-tertiary text-text'
-                  : 'text-text-muted hover:text-text'
-              }`}
-            >
-              Tool Calls
-            </button>
-          </div>
-        }
-      />
+          ))}
+        </div>
+      </div>
 
       <div className="flex-1 flex flex-col min-h-0 px-4 md:px-6 py-5">
         <div className="flex-1 min-h-0">

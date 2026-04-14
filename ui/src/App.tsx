@@ -3,7 +3,7 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { Sidebar } from './components/Sidebar'
 import { ChatPage } from './pages/ChatPage'
 import { PortfolioPage } from './pages/PortfolioPage'
-import { SchedulerPage } from './pages/SchedulerPage'
+import { AutomationPage } from './pages/AutomationPage'
 import { LogsPage } from './pages/LogsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { AIProviderPage } from './pages/AIProviderPage'
@@ -12,23 +12,21 @@ import { NewsPage } from './pages/NewsPage'
 import { TradingPage } from './pages/TradingPage'
 import { ConnectorsPage } from './pages/ConnectorsPage'
 import { DevPage } from './pages/DevPage'
-import { ToolsPage } from './pages/ToolsPage'
 
 export type Page =
-  | 'chat' | 'portfolio' | 'scheduler' | 'logs' | 'market-data' | 'news' | 'connectors'
+  | 'chat' | 'portfolio' | 'automation' | 'logs' | 'market-data' | 'news' | 'connectors'
   | 'trading'
-  | 'ai-provider' | 'settings' | 'tools' | 'dev'
+  | 'ai-provider' | 'settings' | 'dev'
 
 /** Page type → URL path mapping. Chat is the root, everything else maps to /slug. */
 export const ROUTES: Record<Page, string> = {
   'chat': '/',
   'portfolio': '/portfolio',
-  'scheduler': '/scheduler',
+  'automation': '/automation',
   'logs': '/logs',
   'market-data': '/market-data',
   'news': '/news',
   'connectors': '/connectors',
-  'tools': '/tools',
   'trading': '/trading',
   'ai-provider': '/ai-provider',
   'settings': '/settings',
@@ -65,17 +63,18 @@ export function App() {
           <Routes>
             <Route path="/" element={<ChatPage onSSEStatus={setSseConnected} />} />
             <Route path="/portfolio" element={<PortfolioPage />} />
-            <Route path="/scheduler" element={<SchedulerPage />} />
+            <Route path="/automation" element={<AutomationPage />} />
             <Route path="/logs" element={<LogsPage />} />
             <Route path="/market-data" element={<MarketDataPage />} />
             <Route path="/news" element={<NewsPage />} />
             {/* Redirects for old URLs */}
             <Route path="/events" element={<Navigate to="/logs" replace />} />
-            <Route path="/heartbeat" element={<Navigate to="/scheduler" replace />} />
+            <Route path="/heartbeat" element={<Navigate to="/automation" replace />} />
+            <Route path="/scheduler" element={<Navigate to="/automation" replace />} />
             <Route path="/agent-status" element={<Navigate to="/logs" replace />} />
             <Route path="/data-sources" element={<Navigate to="/market-data" replace />} />
             <Route path="/connectors" element={<ConnectorsPage />} />
-            <Route path="/tools" element={<ToolsPage />} />
+            <Route path="/tools" element={<Navigate to="/settings" replace />} />
             <Route path="/trading" element={<TradingPage />} />
             <Route path="/ai-provider" element={<AIProviderPage />} />
             <Route path="/settings" element={<SettingsPage />} />
