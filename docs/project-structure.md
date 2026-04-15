@@ -1,6 +1,6 @@
 # Project Structure
 
-Open Alice is a pnpm monorepo with Turborepo build orchestration.
+OpenAlice is a pnpm monorepo with Turborepo build orchestration.
 
 ```
 packages/

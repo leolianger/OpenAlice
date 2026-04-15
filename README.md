@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="docs/images/alice-full.png" alt="Open Alice" width="128">
+  <img src="docs/images/alice-full.png" alt="OpenAlice" width="128">
 </p>
 
 <p align="center">
   <a href="https://github.com/TraderAlice/OpenAlice/actions/workflows/ci.yml"><img src="https://github.com/TraderAlice/OpenAlice/actions/workflows/ci.yml/badge.svg" alt="CI"></a> · <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg" alt="License: AGPL-3.0"></a> · <a href="https://openalice.ai"><img src="https://img.shields.io/badge/Website-openalice.ai-blue" alt="openalice.ai"></a> · <a href="https://openalice.ai/docs"><img src="https://img.shields.io/badge/Docs-Read-green" alt="Docs"></a> · <a href="https://deepwiki.com/TraderAlice/OpenAlice"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
-# Open Alice
+# OpenAlice
 
 Your one-person Wall Street. Alice is an AI trading agent that covers equities, crypto, commodities, forex, and macro — from research and analysis through position entry, ongoing management, to exit. 
 
@@ -17,11 +17,11 @@ Your one-person Wall Street. Alice is an AI trading agent that covers equities, 
 Alice runs on your own machine, because trading involves private keys and real money — that trust can't be outsourced.
 
 <p align="center">
-  <img src="docs/images/preview.png" alt="Open Alice Preview" width="720">
+  <img src="docs/images/preview.png" alt="OpenAlice Preview" width="720">
 </p>
 
 > [!CAUTION]
-> **Open Alice is experimental software in active development.** Many features and interfaces are incomplete and subject to breaking changes. Do not use this software for live trading with real funds unless you fully understand and accept the risks involved. The authors provide no guarantees of correctness, reliability, or profitability, and accept no liability for financial losses.
+> **OpenAlice is experimental software in active development.** Many features and interfaces are incomplete and subject to breaking changes. Do not use this software for live trading with real funds unless you fully understand and accept the risks involved. The authors provide no guarantees of correctness, reliability, or profitability, and accept no liability for financial losses.
 
 ## Features
 
@@ -175,11 +175,11 @@ On first run, defaults are auto-copied to the user override path. Edit the user 
 
 ## Project Structure
 
-Open Alice is a pnpm monorepo with Turborepo build orchestration. See [docs/project-structure.md](docs/project-structure.md) for the full file tree.
+OpenAlice is a pnpm monorepo with Turborepo build orchestration. See [docs/project-structure.md](docs/project-structure.md) for the full file tree.
 
 ## Roadmap to v1
 
-Open Alice is in pre-release. All planned v1 milestones are now complete — remaining work is testing and stabilization.
+OpenAlice is in pre-release. All planned v1 milestones are now complete — remaining work is testing and stabilization.
 
 - [x] **Tool confirmation** — achieved through Trading-as-Git's push approval mechanism. Order execution requires explicit user approval at the push step, similar to merging a PR
 - [x] **Trading-as-Git stable interface** — the core workflow (stage → commit → push → approval) is stable and running in production

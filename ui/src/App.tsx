@@ -59,7 +59,7 @@ export function App() {
               <path d="M3 5h14M3 10h14M3 15h14" />
             </svg>
           </button>
-          <span className="text-sm font-semibold text-text">Open Alice</span>
+          <span className="text-sm font-semibold text-text">OpenAlice</span>
         </div>
         <div key={location.pathname} className="page-fade-in flex-1 flex flex-col min-h-0">
           <Routes>

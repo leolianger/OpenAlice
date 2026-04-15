@@ -224,7 +224,7 @@ export function Sidebar({ sseConnected, open, onClose }: SidebarProps) {
             className="w-7 h-7 rounded-lg ring-1 ring-accent/25 shadow-[0_0_8px_rgba(88,166,255,0.15)]"
             draggable={false}
           />
-          <h1 className="text-[15px] font-semibold text-text">Open Alice</h1>
+          <h1 className="text-[15px] font-semibold text-text">OpenAlice</h1>
         </div>
 
         {/* Navigation */}

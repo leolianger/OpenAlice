@@ -220,13 +220,13 @@ export interface TradingAccount {
 
 export interface AccountInfo {
   baseCurrency: string
-  netLiquidation: number
-  totalCashValue: number
-  unrealizedPnL: number
-  realizedPnL: number
-  buyingPower?: number
-  initMarginReq?: number
-  maintMarginReq?: number
+  netLiquidation: string
+  totalCashValue: string
+  unrealizedPnL: string
+  realizedPnL: string
+  buyingPower?: string
+  initMarginReq?: string
+  maintMarginReq?: string
 }
 
 export interface Position {
@@ -246,11 +246,12 @@ export interface Position {
   currency: string
   side: 'long' | 'short'
   quantity: string // Decimal serialized as string
-  avgCost: number
-  marketPrice: number
-  marketValue: number
-  unrealizedPnL: number
-  realizedPnL: number
+  /** All monetary fields are strings to prevent IEEE 754 floating-point artifacts. */
+  avgCost: string
+  marketPrice: string
+  marketValue: string
+  unrealizedPnL: string
+  realizedPnL: string
 }
 
 export interface WalletCommitLog {
