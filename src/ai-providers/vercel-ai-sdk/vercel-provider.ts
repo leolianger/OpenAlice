@@ -1,85 +1,81 @@
 /**
- * VercelAIProvider — GenerateProvider backed by Vercel AI SDK's ToolLoopAgent.
+ * VercelAIProvider — GenerateProvider backed by Vercel AI SDK's generateText.
  *
- * The model is lazily created from config and cached.  When model.json or
- * api-keys.json changes on disk, the next request picks up the new model
- * automatically (hot-reload).
+ * The model is lazily created from the resolved profile on each call.
+ * Instructions (persona + brain state) are also re-read per request.
  */
 
 import type { ModelMessage, Tool } from 'ai'
 import type { ProviderResult, ProviderEvent, AIProvider, GenerateOpts } from '../types.js'
 import type { SessionEntry } from '../../core/session.js'
-import type { Agent } from './agent.js'
 import type { MediaAttachment } from '../../core/types.js'
+import type { ResolvedProfile } from '../../core/config.js'
+import { resolveProfile } from '../../core/config.js'
 import { toModelMessages } from '../../core/session.js'
 import { extractMediaFromToolOutput } from '../../core/media.js'
-import { createModelFromConfig, type ModelOverride } from './model-factory.js'
-import { createAgent } from './agent.js'
+import { createModelFromProfile } from './model-factory.js'
+import { generateText, stepCountIs } from './agent.js'
 import { createChannel } from '../../core/async-channel.js'
 
 export class VercelAIProvider implements AIProvider {
   readonly providerTag = 'vercel-ai' as const
-  private cachedKey: string | null = null
-  private cachedToolCount: number = 0
-  private cachedSystemPrompt: string | null = null
-  private cachedAgent: Agent | null = null
 
   constructor(
     private getTools: () => Promise<Record<string, Tool>>,
-    private instructions: string,
+    private getInstructions: () => Promise<string>,
     private maxSteps: number,
   ) {}
 
-  /** Lazily create or return the cached agent, re-creating when config, tools, or system prompt change. */
-  private async resolveAgent(systemPrompt?: string, disabledTools?: string[], modelOverride?: ModelOverride): Promise<Agent> {
-    const { model, key } = await createModelFromConfig(modelOverride)
-    const allTools = await this.getTools()
+  /** Resolve model, tools, and instructions for a single request. */
+  private async resolve(disabledTools?: string[], profile?: ResolvedProfile) {
+    // If no profile provided (e.g. ask()), resolve the active one
+    const effectiveProfile = profile ?? await resolveProfile()
+    const [{ model }, allTools, instructions] = await Promise.all([
+      createModelFromProfile(effectiveProfile),
+      this.getTools(),
+      this.getInstructions(),
+    ])
 
-    // Per-channel overrides: skip cache and create a fresh agent
-    if (disabledTools?.length || modelOverride) {
-      const disabledSet = disabledTools?.length ? new Set(disabledTools) : null
-      const tools = disabledSet
-        ? Object.fromEntries(Object.entries(allTools).filter(([name]) => !disabledSet.has(name)))
-        : allTools
-      return createAgent(model, tools, systemPrompt ?? this.instructions, this.maxSteps)
-    }
+    const tools = disabledTools?.length
+      ? Object.fromEntries(Object.entries(allTools).filter(([name]) => !new Set(disabledTools).has(name)))
+      : allTools
 
-    const toolCount = Object.keys(allTools).length
-    const effectivePrompt = systemPrompt ?? null
-    if (key !== this.cachedKey || toolCount !== this.cachedToolCount || effectivePrompt !== this.cachedSystemPrompt) {
-      this.cachedAgent = createAgent(model, allTools, systemPrompt ?? this.instructions, this.maxSteps)
-      this.cachedKey = key
-      this.cachedToolCount = toolCount
-      this.cachedSystemPrompt = effectivePrompt
-      console.log(`vercel-ai: model loaded → ${key} (${toolCount} tools)`)
-    }
-    return this.cachedAgent!
+    return { model, tools, instructions }
   }
 
-  async ask(prompt: string): Promise<ProviderResult> {
-    const agent = await this.resolveAgent(undefined)
+  async ask(prompt: string, profile?: ResolvedProfile): Promise<ProviderResult> {
+    const { model, tools, instructions } = await this.resolve(undefined, profile)
     const media: MediaAttachment[] = []
-    const result = await agent.generate({
+
+    const result = await generateText({
+      model,
+      tools,
+      system: instructions,
       prompt,
+      stopWhen: stepCountIs(this.maxSteps),
       onStepFinish: (step) => {
         for (const tr of step.toolResults) {
           media.push(...extractMediaFromToolOutput(tr.output))
         }
       },
     })
+
     return { text: result.text ?? '', media }
   }
 
   async *generate(entries: SessionEntry[], _prompt: string, opts?: GenerateOpts): AsyncGenerator<ProviderEvent> {
+    const { model, tools, instructions } = await this.resolve(opts?.disabledTools, opts?.profile)
     const messages = toModelMessages(entries)
-
-    const agent = await this.resolveAgent(opts?.systemPrompt, opts?.disabledTools, opts?.vercelAiSdk)
 
     const channel = createChannel<ProviderEvent>()
     const media: MediaAttachment[] = []
 
-    const resultPromise = agent.generate({
+    const resultPromise = generateText({
+      model,
+      tools,
+      system: opts?.systemPrompt ?? instructions,
       messages: messages as ModelMessage[],
+      stopWhen: stepCountIs(this.maxSteps),
       onStepFinish: (step) => {
         for (const tc of step.toolCalls) {
           channel.push({ type: 'tool_use', id: tc.toolCallId, name: tc.toolName, input: tc.input })

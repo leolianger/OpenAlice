@@ -8,7 +8,7 @@
 import { makeMsg, makeMsgProto, makeField, makeInitialMsg, readMsg, readFields } from '../comm.js'
 import { Connection } from '../connection.js'
 import { EReader } from '../reader.js'
-import { Decoder, applyAllHandlers } from '../decoder'
+import { Decoder, applyAllHandlers } from '../decoder/index.js'
 import type { EWrapper } from '../wrapper.js'
 import { OUT } from '../message.js'
 import {
@@ -281,6 +281,7 @@ export class EClient {
           buf = rest
           const fields = readFields(msg)
           if (fields.length >= 2) {
+            clearTimeout(timer)
             this.conn!.removeListener('data', onData)
             resolve({
               serverVersion: parseInt(fields[0], 10),
@@ -293,8 +294,8 @@ export class EClient {
       this.conn!.on('data', onData)
 
       // Timeout after 10 seconds
-      setTimeout(() => {
-        this.conn!.removeListener('data', onData)
+      const timer = setTimeout(() => {
+        this.conn?.removeListener('data', onData)
         reject(new Error('Handshake timeout'))
       }, 10000)
     })

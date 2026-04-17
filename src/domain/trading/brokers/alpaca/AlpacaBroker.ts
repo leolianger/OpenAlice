@@ -8,18 +8,22 @@
  * Takes IBKR Order objects, reads relevant fields, ignores the rest.
  */
 
+import { z } from 'zod'
 import Alpaca from '@alpacahq/alpaca-trade-api'
 import Decimal from 'decimal.js'
 import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
-import type {
-  IBroker,
-  AccountCapabilities,
-  AccountInfo,
-  Position,
-  PlaceOrderResult,
-  OpenOrder,
-  Quote,
-  MarketClock,
+import {
+  BrokerError,
+  type IBroker,
+  type AccountCapabilities,
+  type AccountInfo,
+  type Position,
+  type PlaceOrderResult,
+  type OpenOrder,
+  type Quote,
+  type MarketClock,
+  type BrokerConfigField,
+  type TpSlParams,
 } from '../types.js'
 import '../../contract-ext.js'
 import type {
@@ -57,6 +61,33 @@ function ibkrTifToAlpaca(tif: string): string {
 }
 
 export class AlpacaBroker implements IBroker {
+  // ---- Self-registration ----
+
+  static configSchema = z.object({
+    paper: z.boolean().default(true),
+    apiKey: z.string().optional(),
+    apiSecret: z.string().optional(),
+  })
+
+  static configFields: BrokerConfigField[] = [
+    { name: 'paper', type: 'boolean', label: 'Paper Trading', default: true, description: 'When enabled, orders are routed to Alpaca\'s paper trading environment.' },
+    { name: 'apiKey', type: 'password', label: 'API Key', required: true, sensitive: true },
+    { name: 'apiSecret', type: 'password', label: 'Secret Key', required: true, sensitive: true },
+  ]
+
+  static fromConfig(config: { id: string; label?: string; brokerConfig: Record<string, unknown> }): AlpacaBroker {
+    const bc = AlpacaBroker.configSchema.parse(config.brokerConfig)
+    return new AlpacaBroker({
+      id: config.id,
+      label: config.label,
+      apiKey: bc.apiKey ?? '',
+      secretKey: bc.apiSecret ?? '',
+      paper: bc.paper,
+    })
+  }
+
+  // ---- Instance ----
+
   readonly id: string
   readonly label: string
 
@@ -77,7 +108,8 @@ export class AlpacaBroker implements IBroker {
 
   async init(): Promise<void> {
     if (!this.config.apiKey || !this.config.secretKey) {
-      throw new Error(
+      throw new BrokerError(
+        'CONFIG',
         `No API credentials configured. Set apiKey and apiSecret in accounts.json to enable this account.`,
       )
     }
@@ -101,7 +133,8 @@ export class AlpacaBroker implements IBroker {
         const isAuthError = err instanceof Error &&
           /40[13]|forbidden|unauthorized/i.test(err.message)
         if (isAuthError && attempt >= AlpacaBroker.MAX_AUTH_RETRIES) {
-          throw new Error(
+          throw new BrokerError(
+            'AUTH',
             `Authentication failed — verify your Alpaca API key and secret are correct.`,
           )
         }
@@ -145,7 +178,7 @@ export class AlpacaBroker implements IBroker {
 
   // ---- Trading operations ----
 
-  async placeOrder(contract: Contract, order: Order): Promise<PlaceOrderResult> {
+  async placeOrder(contract: Contract, order: Order, tpsl?: TpSlParams): Promise<PlaceOrderResult> {
     const symbol = resolveSymbol(contract)
     if (!symbol) {
       return { success: false, error: 'Cannot resolve contract to Alpaca symbol' }
@@ -179,6 +212,20 @@ export class AlpacaBroker implements IBroker {
       if (order.trailingPercent !== UNSET_DOUBLE) alpacaOrder.trail_percent = order.trailingPercent
       if (order.outsideRth) alpacaOrder.extended_hours = true
 
+      // Bracket order (TPSL)
+      if (tpsl?.takeProfit || tpsl?.stopLoss) {
+        alpacaOrder.order_class = 'bracket'
+        if (tpsl.takeProfit) {
+          alpacaOrder.take_profit = { limit_price: parseFloat(tpsl.takeProfit.price) }
+        }
+        if (tpsl.stopLoss) {
+          alpacaOrder.stop_loss = {
+            stop_price: parseFloat(tpsl.stopLoss.price),
+            ...(tpsl.stopLoss.limitPrice && { limit_price: parseFloat(tpsl.stopLoss.limitPrice) }),
+          }
+        }
+      }
+
       const result = await this.client.createOrder(alpacaOrder) as AlpacaOrderRaw
       return {
         success: true,
@@ -190,13 +237,13 @@ export class AlpacaBroker implements IBroker {
     }
   }
 
-  async modifyOrder(orderId: string, changes: Order): Promise<PlaceOrderResult> {
+  async modifyOrder(orderId: string, changes: Partial<Order>): Promise<PlaceOrderResult> {
     try {
       const patch: Record<string, unknown> = {}
-      if (!changes.totalQuantity.equals(UNSET_DECIMAL)) patch.qty = parseFloat(changes.totalQuantity.toString())
-      if (changes.lmtPrice !== UNSET_DOUBLE) patch.limit_price = changes.lmtPrice
-      if (changes.auxPrice !== UNSET_DOUBLE) patch.stop_price = changes.auxPrice
-      if (changes.trailingPercent !== UNSET_DOUBLE) patch.trail = changes.trailingPercent
+      if (changes.totalQuantity != null && !changes.totalQuantity.equals(UNSET_DECIMAL)) patch.qty = parseFloat(changes.totalQuantity.toString())
+      if (changes.lmtPrice != null && changes.lmtPrice !== UNSET_DOUBLE) patch.limit_price = changes.lmtPrice
+      if (changes.auxPrice != null && changes.auxPrice !== UNSET_DOUBLE) patch.stop_price = changes.auxPrice
+      if (changes.trailingPercent != null && changes.trailingPercent !== UNSET_DOUBLE) patch.trail = changes.trailingPercent
       if (changes.tif) patch.time_in_force = ibkrTifToAlpaca(changes.tif)
 
       const result = await this.client.replaceOrder(orderId, patch) as AlpacaOrderRaw
@@ -211,12 +258,14 @@ export class AlpacaBroker implements IBroker {
     }
   }
 
-  async cancelOrder(orderId: string): Promise<boolean> {
+  async cancelOrder(orderId: string): Promise<PlaceOrderResult> {
     try {
       await this.client.cancelOrder(orderId)
-      return true
-    } catch {
-      return false
+      const orderState = new OrderState()
+      orderState.status = 'Cancelled'
+      return { success: true, orderId, orderState }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
     }
   }
 
@@ -257,40 +306,49 @@ export class AlpacaBroker implements IBroker {
   // ---- Queries ----
 
   async getAccount(): Promise<AccountInfo> {
-    const [account, positions] = await Promise.all([
-      this.client.getAccount() as Promise<AlpacaBrokerRaw>,
-      this.client.getPositions() as Promise<AlpacaPositionRaw[]>,
-    ])
+    try {
+      const [account, positions] = await Promise.all([
+        this.client.getAccount() as Promise<AlpacaBrokerRaw>,
+        this.client.getPositions() as Promise<AlpacaPositionRaw[]>,
+      ])
 
-    // Alpaca account API doesn't provide unrealizedPnL — aggregate from positions with Decimal
-    const unrealizedPnL = positions.reduce(
-      (sum, p) => sum.plus(new Decimal(p.unrealized_pl)),
-      new Decimal(0),
-    ).toNumber()
+      // Alpaca account API doesn't provide unrealizedPnL — aggregate from positions with Decimal
+      const unrealizedPnL = positions.reduce(
+        (sum, p) => sum.plus(new Decimal(p.unrealized_pl)),
+        new Decimal(0),
+      )
 
-    return {
-      netLiquidation: parseFloat(account.equity),
-      totalCashValue: parseFloat(account.cash),
-      unrealizedPnL,
-      buyingPower: parseFloat(account.buying_power),
-      dayTradesRemaining: account.daytrade_count != null ? Math.max(0, 3 - account.daytrade_count) : undefined,
+      return {
+        baseCurrency: 'USD',
+        netLiquidation: new Decimal(account.equity).toString(),
+        totalCashValue: new Decimal(account.cash).toString(),
+        unrealizedPnL: unrealizedPnL.toString(),
+        buyingPower: new Decimal(account.buying_power).toString(),
+        dayTradesRemaining: account.daytrade_count != null ? Math.max(0, 3 - account.daytrade_count) : undefined,
+      }
+    } catch (err) {
+      throw BrokerError.from(err)
     }
   }
 
   async getPositions(): Promise<Position[]> {
-    const raw = await this.client.getPositions() as AlpacaPositionRaw[]
+    try {
+      const raw = await this.client.getPositions() as AlpacaPositionRaw[]
 
-    return raw.map(p => ({
-      contract: makeContract(p.symbol),
-      side: p.side === 'long' ? 'long' as const : 'short' as const,
-      quantity: new Decimal(p.qty),
-      avgCost: parseFloat(p.avg_entry_price),
-      marketPrice: parseFloat(p.current_price),
-      marketValue: Math.abs(parseFloat(p.market_value)),
-      unrealizedPnL: parseFloat(p.unrealized_pl),
-      realizedPnL: 0,
-      leverage: 1,
-    }))
+      return raw.map(p => ({
+        contract: makeContract(p.symbol),
+        currency: 'USD',
+        side: p.side === 'long' ? 'long' as const : 'short' as const,
+        quantity: new Decimal(p.qty),
+        avgCost: new Decimal(p.avg_entry_price).toString(),
+        marketPrice: new Decimal(p.current_price).toString(),
+        marketValue: new Decimal(p.market_value).abs().toString(),
+        unrealizedPnL: new Decimal(p.unrealized_pl).toString(),
+        realizedPnL: '0',
+      }))
+    } catch (err) {
+      throw BrokerError.from(err)
+    }
   }
 
   async getOrders(orderIds: string[]): Promise<OpenOrder[]> {
@@ -313,17 +371,21 @@ export class AlpacaBroker implements IBroker {
 
   async getQuote(contract: Contract): Promise<Quote> {
     const symbol = resolveSymbol(contract)
-    if (!symbol) throw new Error('Cannot resolve contract to Alpaca symbol')
+    if (!symbol) throw new BrokerError('EXCHANGE', 'Cannot resolve contract to Alpaca symbol')
 
-    const snapshot = await this.client.getSnapshot(symbol) as AlpacaSnapshotRaw
+    try {
+      const snapshot = await this.client.getSnapshot(symbol) as AlpacaSnapshotRaw
 
-    return {
-      contract: makeContract(symbol),
-      last: snapshot.LatestTrade.Price,
-      bid: snapshot.LatestQuote.BidPrice,
-      ask: snapshot.LatestQuote.AskPrice,
-      volume: snapshot.DailyBar.Volume,
-      timestamp: new Date(snapshot.LatestTrade.Timestamp),
+      return {
+        contract: makeContract(symbol),
+        last: snapshot.LatestTrade.Price,
+        bid: snapshot.LatestQuote.BidPrice,
+        ask: snapshot.LatestQuote.AskPrice,
+        volume: snapshot.DailyBar.Volume,
+        timestamp: new Date(snapshot.LatestTrade.Timestamp),
+      }
+    } catch (err) {
+      throw BrokerError.from(err)
     }
   }
 
@@ -337,15 +399,29 @@ export class AlpacaBroker implements IBroker {
   }
 
   async getMarketClock(): Promise<MarketClock> {
-    const clock = await this.client.getClock() as AlpacaClockRaw
-    return {
-      isOpen: clock.is_open,
-      nextOpen: new Date(clock.next_open),
-      nextClose: new Date(clock.next_close),
-      timestamp: new Date(clock.timestamp),
+    try {
+      const clock = await this.client.getClock() as AlpacaClockRaw
+      return {
+        isOpen: clock.is_open,
+        nextOpen: new Date(clock.next_open),
+        nextClose: new Date(clock.next_close),
+        timestamp: new Date(clock.timestamp),
+      }
+    } catch (err) {
+      throw BrokerError.from(err)
     }
   }
 
+
+  // ---- Contract identity ----
+
+  getNativeKey(contract: Contract): string {
+    return contract.symbol
+  }
+
+  resolveNativeKey(nativeKey: string): Contract {
+    return makeContract(nativeKey)
+  }
 
   // ---- Internal ----
 
@@ -364,10 +440,30 @@ export class AlpacaBroker implements IBroker {
     // The real string ID is preserved through PlaceOrderResult.orderId and getOrder(string).
     order.orderId = 0
 
+    const tpsl = this.extractTpSl(o)
     return {
       contract,
       order,
       orderState: makeOrderState(o.status, o.reject_reason ?? undefined),
+      ...(tpsl && { tpsl }),
     }
+  }
+
+  private extractTpSl(o: AlpacaOrderRaw): TpSlParams | undefined {
+    if (o.order_class !== 'bracket' || !o.legs?.length) return undefined
+    let takeProfit: TpSlParams['takeProfit']
+    let stopLoss: TpSlParams['stopLoss']
+    for (const leg of o.legs) {
+      if (leg.limit_price && !leg.stop_price) {
+        takeProfit = { price: leg.limit_price }
+      } else if (leg.stop_price) {
+        stopLoss = {
+          price: leg.stop_price,
+          ...(leg.limit_price && { limitPrice: leg.limit_price }),
+        }
+      }
+    }
+    if (!takeProfit && !stopLoss) return undefined
+    return { takeProfit, stopLoss }
   }
 }

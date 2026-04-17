@@ -1,4 +1,8 @@
+import type { QueryExecutor } from '@traderalice/opentypebb'
 import type { AccountManager } from '../domain/trading/index.js'
+import type { FxService } from '../domain/trading/fx-service.js'
+import type { SnapshotService } from '../domain/trading/snapshot/index.js'
+import type { INewsProvider } from '../domain/news/types.js'
 import type { CronEngine } from '../task/cron/engine.js'
 import type { Heartbeat } from '../task/heartbeat/index.js'
 import type { Config, WebChannel } from './config.js'
@@ -7,6 +11,7 @@ import type { AgentCenter } from './agent-center.js'
 import type { EventLog } from './event-log.js'
 import type { ToolCallLog } from './tool-call-log.js'
 import type { ToolCenter } from './tool-center.js'
+import type { ListenerRegistry } from './listener-registry.js'
 
 export type { Config, WebChannel }
 
@@ -31,11 +36,16 @@ export interface EngineContext {
   heartbeat: Heartbeat
   cronEngine: CronEngine
   toolCenter: ToolCenter
+  listenerRegistry: ListenerRegistry
+
+  // Market data
+  bbEngine: QueryExecutor
 
   // Trading (unified account model)
   accountManager: AccountManager
-  /** Reconnect a specific trading account by ID. */
-  reconnectAccount: (accountId: string) => Promise<ReconnectResult>
+  fxService: FxService
+  snapshotService?: SnapshotService
+  newsProvider?: INewsProvider
   /** Reconnect connector plugins (Telegram, MCP-Ask, etc.). */
   reconnectConnectors: () => Promise<ReconnectResult>
 }

@@ -11,13 +11,17 @@ import { createChatRoutes, createMediaRoutes, type SSEClient } from './routes/ch
 import { createChannelsRoutes } from './routes/channels.js'
 import { createConfigRoutes, createMarketDataRoutes } from './routes/config.js'
 import { createEventsRoutes } from './routes/events.js'
+import { createTopologyRoutes } from './routes/topology.js'
 import { createCronRoutes } from './routes/cron.js'
 import { createHeartbeatRoutes } from './routes/heartbeat.js'
+import { createDiaryRoutes } from './routes/diary.js'
 import { createTradingRoutes } from './routes/trading.js'
 import { createTradingConfigRoutes } from './routes/trading-config.js'
 import { createDevRoutes } from './routes/dev.js'
 import { createToolsRoutes } from './routes/tools.js'
 import { createAgentStatusRoutes } from './routes/agent-status.js'
+import { createPersonaRoutes } from './routes/persona.js'
+import { createNewsRoutes } from './routes/news.js'
 
 export interface WebConfig {
   port: number
@@ -72,17 +76,22 @@ export class WebPlugin implements Plugin {
     app.route('/api/channels', createChannelsRoutes({ sessions, sseByChannel: this.sseByChannel }))
     app.route('/api/media', createMediaRoutes())
     app.route('/api/config', createConfigRoutes({
+      ctx,
       onConnectorsChange: async () => { await ctx.reconnectConnectors() },
     }))
-    app.route('/api/market-data', createMarketDataRoutes())
+    app.route('/api/market-data', createMarketDataRoutes(ctx))
     app.route('/api/events', createEventsRoutes(ctx))
+    app.route('/api/topology', createTopologyRoutes(ctx))
     app.route('/api/cron', createCronRoutes(ctx))
     app.route('/api/heartbeat', createHeartbeatRoutes(ctx))
+    app.route('/api/diary', createDiaryRoutes(ctx))
     app.route('/api/trading/config', createTradingConfigRoutes(ctx))
     app.route('/api/trading', createTradingRoutes(ctx))
     app.route('/api/dev', createDevRoutes(ctx.connectorCenter))
     app.route('/api/tools', createToolsRoutes(ctx.toolCenter))
     app.route('/api/agent-status', createAgentStatusRoutes(ctx))
+    app.route('/api/news', createNewsRoutes(ctx))
+    app.route('/api/persona', createPersonaRoutes())
 
     // ==================== Serve UI (Vite build output) ====================
     const uiRoot = resolve('dist/ui')

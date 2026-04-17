@@ -10,7 +10,7 @@ import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-
 import { pino } from 'pino'
 import type { ContentBlock } from '../../core/session.js'
 
-import { readAIProviderConfig } from '../../core/config.js'
+// Config is now resolved via profile system — override carries all needed values
 
 const logger = pino({
   transport: { target: 'pino/file', options: { destination: 'logs/agent-sdk.log', mkdir: true } },
@@ -117,20 +117,22 @@ export async function askAgentSdk(
   const finalAllowed = allowedTools.length > 0 ? allowedTools : modeAllowed
   const finalDisallowed = [...disallowedTools, ...modeDisallowed]
 
-  // Build env with authentication
-  const aiConfig = await readAIProviderConfig()
-  const loginMethod = override?.loginMethod ?? aiConfig.loginMethod ?? 'api-key'
+  // Build env with authentication — override carries resolved profile values
+  const loginMethod = override?.loginMethod ?? 'api-key'
   const isOAuthMode = loginMethod === 'claudeai'
 
   const env: Record<string, string | undefined> = { ...process.env }
   if (isOAuthMode) {
     // Force OAuth by removing any inherited API key
     delete env.ANTHROPIC_API_KEY
+    delete env.CLAUDE_CODE_SIMPLE
   } else {
-    const apiKey = override?.apiKey ?? aiConfig.apiKeys.anthropic
+    const apiKey = override?.apiKey
     if (apiKey) env.ANTHROPIC_API_KEY = apiKey
+    // Force API key mode — disable OAuth even if local login exists
+    env.CLAUDE_CODE_SIMPLE = '1'
   }
-  const baseUrl = override?.baseUrl ?? aiConfig.baseUrl
+  const baseUrl = override?.baseUrl
   if (baseUrl) env.ANTHROPIC_BASE_URL = baseUrl
 
   // MCP servers
@@ -149,7 +151,7 @@ export async function askAgentSdk(
       options: {
         cwd,
         env,
-        model: override?.model ?? aiConfig.model,
+        model: override?.model ?? 'claude-opus-4-7',
         maxTurns,
         allowedTools: finalAllowed,
         disallowedTools: finalDisallowed,
@@ -213,14 +215,35 @@ export async function askAgentSdk(
         } else {
           ok = false
           resultText = result.errors?.join('\n') ?? `Agent SDK error: ${result.subtype}`
+          // Log failed results with all available detail
+          const resultDetail = { subtype: result.subtype, errors: result.errors, result: result.result }
+          logger.error({ ...resultDetail, turns: result.num_turns, durationMs: result.duration_ms }, 'result_error')
+          console.error('[agent-sdk] Non-success result:', resultDetail)
         }
         logger.info({ subtype: result.subtype, turns: result.num_turns, durationMs: result.duration_ms }, 'result')
       }
     }
   } catch (err) {
-    logger.error({ error: String(err) }, 'query_error')
+    // Extract as much detail as possible from the error
+    const errObj = err instanceof Error ? err : new Error(String(err))
+    const details: Record<string, unknown> = {
+      message: errObj.message,
+      stack: errObj.stack,
+    }
+    // SDK errors may carry stderr/stdout/cause as extra properties
+    for (const key of ['stderr', 'stdout', 'cause', 'code', 'signal'] as const) {
+      if ((errObj as any)[key] != null) details[key] = (errObj as any)[key]
+    }
+    // Enumerate any non-standard properties on the error object
+    const extraKeys = Object.keys(errObj).filter(k => !(k in details))
+    for (const k of extraKeys) details[k] = (errObj as any)[k]
+
+    logger.error(details, 'query_error')
+    // Also log to console so the developer can see it in the terminal
+    console.error('[agent-sdk] Claude Code process error:', details)
     ok = false
-    resultText = `Agent SDK error: ${err}`
+    const stderrHint = details.stderr ? `\nstderr: ${details.stderr}` : ''
+    resultText = `Agent SDK error: ${errObj.message}${stderrHint}`
   }
 
   // Fallback: if result is empty, extract last assistant text

@@ -35,7 +35,7 @@ export function createChatRoutes({ ctx, sessions, sseByChannel }: ChatDeps) {
 
     // Build AskOptions from channel config (if not default)
     const opts: AskOptions = {
-      historyPreamble: 'The following is the recent conversation from the Web UI. Use it as context if the user references earlier messages.',
+      historyPreamble: `You are operating via the Web UI (session: web/${channelId}). The following is the recent conversation.`,
     }
     if (channelId !== 'default') {
       const channels = await readWebSubchannels()
@@ -43,9 +43,7 @@ export function createChatRoutes({ ctx, sessions, sseByChannel }: ChatDeps) {
       if (channel) {
         if (channel.systemPrompt) opts.systemPrompt = channel.systemPrompt
         if (channel.disabledTools?.length) opts.disabledTools = channel.disabledTools
-        if (channel.provider) opts.provider = channel.provider
-        if (channel.vercelAiSdk) opts.vercelAiSdk = channel.vercelAiSdk
-        if (channel.agentSdk) opts.agentSdk = channel.agentSdk
+        if (channel.profile) opts.profileSlug = channel.profile
       }
     }
 

@@ -9,7 +9,7 @@
  * placeOrder returns submitted — fill confirmed via getOrder/sync.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { UnifiedTradingAccount } from '../../UnifiedTradingAccount.js'
 import { MockBroker } from '../../brokers/mock/index.js'
 import '../../contract-ext.js'
@@ -28,7 +28,7 @@ beforeEach(() => {
 
 describe('UTA — full trading lifecycle', () => {
   it('market buy: push returns submitted, position appears, cash decreases', async () => {
-    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', side: 'buy', type: 'market', qty: 10 })
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 10 })
     const commitResult = uta.commit('buy 10 AAPL')
     expect(commitResult.prepared).toBe(true)
 
@@ -49,24 +49,26 @@ describe('UTA — full trading lifecycle', () => {
     expect(account.totalCashValue).toBe(100_000 - 10 * 150)
   })
 
-  it('market buy → sync confirms filled', async () => {
-    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', side: 'buy', type: 'market', qty: 10 })
+  it('market buy fills at push time — no sync needed', async () => {
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 10 })
     uta.commit('buy AAPL')
-    await uta.push()
+    const pushResult = await uta.push()
 
-    // Sync detects fill (MockBroker market orders are internally filled)
+    // Market order fills synchronously — status is 'filled' at push time
+    expect(pushResult.submitted[0].status).toBe('filled')
+
+    // Sync has nothing to do (order already resolved)
     const syncResult = await uta.sync()
-    expect(syncResult.updatedCount).toBe(1)
-    expect(syncResult.updates[0].currentStatus).toBe('filled')
+    expect(syncResult.updatedCount).toBe(0)
   })
 
   it('getState reflects positions and pending orders', async () => {
-    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', side: 'buy', type: 'market', qty: 10 })
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 10 })
     uta.commit('buy AAPL')
     await uta.push()
 
     // Place a limit order (goes submitted)
-    uta.stagePlaceOrder({ aliceId: 'mock-paper|ETH', symbol: 'ETH', side: 'buy', type: 'limit', qty: 1, price: 1800 })
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|ETH', symbol: 'ETH', action: 'BUY', orderType: 'LMT', totalQuantity: 1, lmtPrice: 1800 })
     uta.commit('limit buy ETH')
     const limitPush = await uta.push()
     expect(limitPush.submitted).toHaveLength(1)
@@ -78,7 +80,7 @@ describe('UTA — full trading lifecycle', () => {
   })
 
   it('limit order → submitted → fill → sync detects filled', async () => {
-    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', side: 'buy', type: 'limit', qty: 5, price: 145 })
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'LMT', totalQuantity: 5, lmtPrice: 145 })
     uta.commit('limit buy AAPL')
     const pushResult = await uta.push()
     expect(pushResult.submitted).toHaveLength(1)
@@ -105,7 +107,7 @@ describe('UTA — full trading lifecycle', () => {
   })
 
   it('partial close reduces position', async () => {
-    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', side: 'buy', type: 'market', qty: 10 })
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 10 })
     uta.commit('buy')
     await uta.push()
 
@@ -120,7 +122,7 @@ describe('UTA — full trading lifecycle', () => {
   })
 
   it('full close removes position + restores cash', async () => {
-    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', side: 'buy', type: 'market', qty: 10 })
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 10 })
     uta.commit('buy')
     await uta.push()
 
@@ -134,7 +136,7 @@ describe('UTA — full trading lifecycle', () => {
   })
 
   it('cancel pending order', async () => {
-    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', side: 'buy', type: 'limit', qty: 5, price: 140 })
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'LMT', totalQuantity: 5, lmtPrice: 140 })
     uta.commit('limit buy')
     const pushResult = await uta.push()
     const orderId = pushResult.submitted[0].orderId!
@@ -148,7 +150,7 @@ describe('UTA — full trading lifecycle', () => {
   })
 
   it('trading history records all commits', async () => {
-    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', side: 'buy', type: 'market', qty: 10 })
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 10 })
     uta.commit('buy AAPL')
     await uta.push()
 
@@ -163,12 +165,49 @@ describe('UTA — full trading lifecycle', () => {
   })
 })
 
+// ==================== TPSL end-to-end ====================
+
+describe('UTA — TPSL end-to-end', () => {
+  it('tpsl params flow through to broker.placeOrder', async () => {
+    const spy = vi.spyOn(broker, 'placeOrder')
+
+    uta.stagePlaceOrder({
+      aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 10,
+      takeProfit: { price: '160' },
+      stopLoss: { price: '140', limitPrice: '139.50' },
+    })
+    uta.commit('buy AAPL with TPSL')
+    const result = await uta.push()
+
+    expect(result.submitted).toHaveLength(1)
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    // Verify tpsl reached the broker (3rd argument)
+    const tpslArg = spy.mock.calls[0][2]
+    expect(tpslArg).toEqual({
+      takeProfit: { price: '160' },
+      stopLoss: { price: '140', limitPrice: '139.50' },
+    })
+  })
+
+  it('order without tpsl passes undefined to broker', async () => {
+    const spy = vi.spyOn(broker, 'placeOrder')
+
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL', action: 'BUY', orderType: 'MKT', totalQuantity: 10 })
+    uta.commit('buy AAPL no TPSL')
+    await uta.push()
+
+    const tpslArg = spy.mock.calls[0][2]
+    expect(tpslArg).toBeUndefined()
+  })
+})
+
 // ==================== Precision end-to-end ====================
 
 describe('UTA — precision end-to-end', () => {
   it('fractional qty survives stage → push → position', async () => {
     broker.setQuote('ETH', 1920)
-    uta.stagePlaceOrder({ aliceId: 'mock-paper|ETH', symbol: 'ETH', side: 'buy', type: 'market', qty: 0.123456789 })
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|ETH', symbol: 'ETH', action: 'BUY', orderType: 'MKT', totalQuantity: 0.123456789 })
     uta.commit('buy fractional ETH')
     const result = await uta.push()
 
@@ -179,7 +218,7 @@ describe('UTA — precision end-to-end', () => {
 
   it('partial close precision: 1.0 - 0.3 = 0.7 exactly', async () => {
     broker.setQuote('ETH', 1920)
-    uta.stagePlaceOrder({ aliceId: 'mock-paper|ETH', symbol: 'ETH', side: 'buy', type: 'market', qty: 1.0 })
+    uta.stagePlaceOrder({ aliceId: 'mock-paper|ETH', symbol: 'ETH', action: 'BUY', orderType: 'MKT', totalQuantity: 1.0 })
     uta.commit('buy 1 ETH')
     await uta.push()
 

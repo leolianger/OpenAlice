@@ -13,6 +13,7 @@
  */
 
 import type { AskOptions, ProviderResult, ProviderEvent, GenerateOpts } from './ai-provider-manager.js'
+import type { ResolvedProfile } from './config.js'
 import { GenerateRouter, StreamableResult } from './ai-provider-manager.js'
 import type { ISessionStore, ContentBlock } from './session.js'
 import type { CompactionConfig } from './compaction.js'
@@ -58,6 +59,16 @@ export class AgentCenter {
     return this.router.ask(prompt)
   }
 
+  /** Test a saved profile by sending a prompt to its provider. */
+  async testProfile(profileSlug: string, prompt = 'Hi'): Promise<ProviderResult> {
+    return this.router.askWithProfileSlug(prompt, profileSlug)
+  }
+
+  /** Test an unsaved profile (inline data). Used for pre-save connection testing. */
+  async testWithProfile(profile: ResolvedProfile, prompt = 'Hi'): Promise<ProviderResult> {
+    return this.router.askWithProfile(prompt, profile)
+  }
+
   /** Prompt with session history — full orchestration pipeline. */
   askWithSession(prompt: string, session: ISessionStore, opts?: AskOptions): StreamableResult {
     return new StreamableResult(this._generate(prompt, session, opts))
@@ -73,8 +84,8 @@ export class AgentCenter {
     // 1. Append user message to session
     await session.appendUser(prompt, 'human')
 
-    // 2. Resolve provider (may be overridden per-request)
-    const provider = await this.router.resolve(opts?.provider)
+    // 2. Resolve provider + profile (may be overridden per-request via profileSlug)
+    const { provider, profile } = await this.router.resolve(opts?.profileSlug)
 
     // 3. Compact if needed (provider can override with custom strategy)
     const compactionResult = provider.compact
@@ -94,8 +105,7 @@ export class AgentCenter {
       historyPreamble: opts?.historyPreamble ?? this.defaultPreamble,
       maxHistoryEntries: opts?.maxHistoryEntries ?? this.defaultMaxHistory,
       disabledTools: opts?.disabledTools,
-      vercelAiSdk: opts?.vercelAiSdk,
-      agentSdk: opts?.agentSdk,
+      profile,
     }
     const source = provider.generate(entries, prompt, genOpts)
 

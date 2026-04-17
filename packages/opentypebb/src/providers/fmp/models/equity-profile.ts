@@ -39,10 +39,10 @@ const ALIAS_DICT: Record<string, string> = {
 }
 
 export const FMPEquityProfileDataSchema = EquityInfoDataSchema.extend({
-  is_etf: z.boolean().describe('If the symbol is an ETF.'),
-  is_actively_trading: z.boolean().describe('If the company is actively trading.'),
-  is_adr: z.boolean().describe('If the stock is an ADR.'),
-  is_fund: z.boolean().describe('If the company is a fund.'),
+  is_etf: z.boolean().default(false).describe('If the symbol is an ETF.'),
+  is_actively_trading: z.boolean().default(true).describe('If the company is actively trading.'),
+  is_adr: z.boolean().default(false).describe('If the stock is an ADR.'),
+  is_fund: z.boolean().default(false).describe('If the company is a fund.'),
   image: z.string().nullable().default(null).describe('Image of the company.'),
   currency: z.string().nullable().default(null).describe('Currency in which the stock is traded.'),
   market_cap: z.number().nullable().default(null).describe('Market capitalization of the company.'),
@@ -114,6 +114,8 @@ export class FMPEquityProfileFetcher extends Fetcher {
       }
       const cleaned = replaceEmptyStrings(d)
       const aliased = applyAliases(cleaned, ALIAS_DICT)
+      // FMP returns employees as string — coerce to number
+      if (typeof aliased.employees === 'string') aliased.employees = parseInt(aliased.employees, 10) || null
       return FMPEquityProfileDataSchema.parse(aliased)
     })
   }

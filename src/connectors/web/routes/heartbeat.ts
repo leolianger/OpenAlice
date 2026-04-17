@@ -4,6 +4,7 @@ import { dirname } from 'node:path'
 import type { EngineContext } from '../../../core/types.js'
 
 const PROMPT_FILE = 'data/brain/heartbeat.md'
+const PROMPT_DEFAULT = 'default/heartbeat.default.md'
 
 /** Heartbeat routes: GET /status, POST /trigger, PUT /enabled, GET/PUT /prompt-file */
 export function createHeartbeatRoutes(ctx: EngineContext) {
@@ -43,6 +44,10 @@ export function createHeartbeatRoutes(ctx: EngineContext) {
       return c.json({ content, path: PROMPT_FILE })
     } catch (err: unknown) {
       if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        try {
+          const fallback = await readFile(PROMPT_DEFAULT, 'utf-8')
+          return c.json({ content: fallback, path: PROMPT_FILE })
+        } catch { /* default also missing */ }
         return c.json({ content: '', path: PROMPT_FILE })
       }
       return c.json({ error: String(err) }, 500)

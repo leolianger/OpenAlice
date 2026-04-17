@@ -10,14 +10,16 @@ import { askAgentSdk } from '../../ai-providers/agent-sdk/query.js'
 import type { AgentSdkConfig } from '../../ai-providers/agent-sdk/query.js'
 import { SessionStore } from '../../core/session'
 import { forceCompact } from '../../core/compaction'
-import { readAIBackend, writeAIBackend, type AIBackend } from '../../core/config'
+import { readAIProviderConfig, setActiveProfile, readConnectorsConfig } from '../../core/config'
 import type { ConnectorCenter } from '../../core/connector-center.js'
 import { TelegramConnector, splitMessage, MAX_MESSAGE_LENGTH } from './telegram-connector.js'
+import type { AccountManager } from '../../domain/trading/index.js'
+import type { Operation } from '../../domain/trading/git/types.js'
+import { getOperationSymbol } from '../../domain/trading/git/types.js'
 
-const BACKEND_LABELS: Record<AIBackend, string> = {
-  'claude-code': 'Claude Code',
-  'vercel-ai-sdk': 'Vercel AI SDK',
-  'agent-sdk': 'Agent SDK',
+/** Build a display label for a profile. */
+function profileLabel(name: string, profile: { model: string }): string {
+  return `${name} (${profile.model})`
 }
 
 export class TelegramPlugin implements Plugin {
@@ -34,6 +36,7 @@ export class TelegramPlugin implements Plugin {
 
   /** Throttle: last time we sent an auth-guidance reply per chatId. */
   private authReplyThrottle = new Map<number, number>()
+  private webPort = 3002
 
   constructor(
     config: Omit<TelegramConfig, 'pollingTimeout'> & { pollingTimeout?: number },
@@ -45,6 +48,7 @@ export class TelegramPlugin implements Plugin {
 
   async start(engineCtx: EngineContext) {
     this.connectorCenter = engineCtx.connectorCenter
+    this.webPort = engineCtx.config.connectors.web.port
 
     // Inject agent config into Claude Code config (used by /compact command)
     this.agentSdkConfig = {
@@ -63,26 +67,30 @@ export class TelegramPlugin implements Plugin {
       console.error('telegram bot error:', err)
     })
 
-    // ── Middleware: auth guard (always active) ──
+    // ── Middleware: auth guard (hot-reloads chatIds from connectors.json) ──
     bot.use(async (ctx, next) => {
       const chatId = ctx.chat?.id
       if (!chatId) return
-      if (this.config.allowedChatIds.includes(chatId)) return next()
+      const { telegram } = await readConnectorsConfig()
+      if (telegram.chatIds.includes(chatId)) return next()
 
       // Unauthorized — log chat ID for operator, throttle reply (60s)
       const now = Date.now()
       const last = this.authReplyThrottle.get(chatId) ?? 0
       if (now - last > 60_000) {
         this.authReplyThrottle.set(chatId, now)
-        console.log(`telegram: unauthorized chat ${chatId}, set TELEGRAM_CHAT_ID=${chatId} to allow`)
-        await ctx.reply('This chat is not authorized. Add this chat ID to TELEGRAM_CHAT_ID in your environment config.').catch(() => {})
+        const link = `http://localhost:${this.webPort}/connectors?addChatId=${chatId}`
+        console.log(`telegram: unauthorized chat ${chatId}, authorize via ${link}`)
+        await ctx.reply(`To authorize this chat, open:\n${link}`).catch(() => {})
       }
     })
 
     // ── Commands ──
     bot.command('status', async (ctx) => {
-      const aiConfig = await readAIBackend()
-      await this.sendReply(ctx.chat.id, `Engine is running. Provider: ${BACKEND_LABELS[aiConfig.backend]}`)
+      const aiConfig = await readAIProviderConfig()
+      const profile = aiConfig.profiles[aiConfig.activeProfile]
+      const label = profile ? profileLabel(aiConfig.activeProfile, profile) : aiConfig.activeProfile
+      await this.sendReply(ctx.chat.id, `Engine is running. Profile: ${label}`)
     })
 
     bot.command('settings', async (ctx) => {
@@ -99,27 +107,68 @@ export class TelegramPlugin implements Plugin {
       await this.handleCompactCommand(ctx.chat.id, userId)
     })
 
+    bot.command('trading', async (ctx) => {
+      await this.handleTradingCommand(ctx.chat.id, engineCtx.accountManager)
+    })
+
     // ── Callback queries (inline keyboard presses) ──
     bot.on('callback_query:data', async (ctx) => {
       const data = ctx.callbackQuery.data
       try {
-        if (data.startsWith('provider:')) {
-          const backend = data.slice('provider:'.length) as AIBackend
-          await writeAIBackend(backend)
-          await ctx.answerCallbackQuery({ text: `Switched to ${BACKEND_LABELS[backend]}` })
+        if (data.startsWith('profile:')) {
+          const slug = data.slice('profile:'.length)
+          await setActiveProfile(slug)
+          const config = await readAIProviderConfig()
+          const profile = config.profiles[slug]
+          const label = profile ? profileLabel(slug, profile) : slug
+          await ctx.answerCallbackQuery({ text: `Switched to ${label}` })
 
           // Edit the original settings message in-place
-          const ccLabel = backend === 'claude-code' ? '> Claude Code' : 'Claude Code'
-          const aiLabel = backend === 'vercel-ai-sdk' ? '> Vercel AI SDK' : 'Vercel AI SDK'
-          const sdkLabel = backend === 'agent-sdk' ? '> Agent SDK' : 'Agent SDK'
           const keyboard = new InlineKeyboard()
-            .text(ccLabel, 'provider:claude-code')
-            .text(aiLabel, 'provider:vercel-ai-sdk')
-            .text(sdkLabel, 'provider:agent-sdk')
+          for (const s of Object.keys(config.profiles)) {
+            const prefix = s === slug ? '> ' : ''
+            keyboard.text(`${prefix}${s}`, `profile:${s}`)
+          }
           await ctx.editMessageText(
-            `Current provider: ${BACKEND_LABELS[backend]}\n\nChoose default AI provider:`,
+            `Current profile: ${label}\n\nChoose AI profile:`,
             { reply_markup: keyboard },
           )
+        } else if (data.startsWith('trading:')) {
+          const parts = data.split(':')
+          const action = parts[1]
+          const accountId = parts.slice(2).join(':')
+
+          if (action === 'back') {
+            // Return to overview
+            const { text, keyboard } = await this.buildTradingOverview(engineCtx.accountManager)
+            await ctx.answerCallbackQuery()
+            await ctx.editMessageText(text, { reply_markup: keyboard }).catch(() => {})
+          } else if (action === 'view') {
+            const { text, keyboard } = await this.buildAccountPanel(engineCtx.accountManager, accountId)
+            await ctx.answerCallbackQuery()
+            await ctx.editMessageText(text, { reply_markup: keyboard }).catch(() => {})
+          } else if (action === 'push' || action === 'reject') {
+            const uta = engineCtx.accountManager.get(accountId)
+            if (!uta) { await ctx.answerCallbackQuery({ text: 'Account not found' }); return }
+            const status = uta.status()
+            if (!status.pendingMessage) {
+              await ctx.answerCallbackQuery({ text: 'No pending commit' })
+              // Refresh panel
+              const { text, keyboard } = await this.buildAccountPanel(engineCtx.accountManager, accountId)
+              await ctx.editMessageText(text, { reply_markup: keyboard }).catch(() => {})
+              return
+            }
+            if (action === 'push') {
+              const result = await uta.push()
+              await ctx.answerCallbackQuery({ text: `${result.submitted.length} submitted, ${result.rejected.length} rejected` })
+            } else {
+              await uta.reject()
+              await ctx.answerCallbackQuery({ text: 'Rejected' })
+            }
+            // Refresh panel after action
+            const { text, keyboard } = await this.buildAccountPanel(engineCtx.accountManager, accountId)
+            await ctx.editMessageText(text, { reply_markup: keyboard }).catch(() => {})
+          }
         } else if (data.startsWith('heartbeat:')) {
           const newEnabled = data === 'heartbeat:on'
           await engineCtx.heartbeat.setEnabled(newEnabled)
@@ -165,12 +214,13 @@ export class TelegramPlugin implements Plugin {
       { command: 'settings', description: 'Choose default AI provider' },
       { command: 'heartbeat', description: 'Toggle heartbeat self-check' },
       { command: 'compact', description: 'Force compact session context' },
+      { command: 'trading', description: 'Trading status and pending commits' },
     ])
 
     // ── Initialize and get bot info ──
     await bot.init()
-    const aiConfig = await readAIBackend()
-    console.log(`telegram plugin: connected as @${bot.botInfo.username} (backend: ${aiConfig.backend})`)
+    const initConfig = await readAIProviderConfig()
+    console.log(`telegram plugin: connected as @${bot.botInfo.username} (profile: ${initConfig.activeProfile})`)
 
     // ── Register connector for outbound delivery (heartbeat / cron responses) ──
     if (this.config.allowedChatIds.length > 0) {
@@ -239,7 +289,7 @@ export class TelegramPlugin implements Plugin {
         // Route through AgentCenter → GenerateRouter → active provider
         const session = await this.getSession(message.from.id)
         const result = await engineCtx.agentCenter.askWithSession(prompt, session, {
-          historyPreamble: 'The following is the recent conversation from this Telegram chat. Use it as context if the user references earlier messages.',
+          historyPreamble: `You are operating via Telegram (session: telegram/${message.from.id}). The following is the recent conversation.`,
         })
         stopTyping()
         await this.sendReplyWithPlaceholder(message.chatId, result.text, result.media, placeholder?.message_id)
@@ -288,19 +338,19 @@ export class TelegramPlugin implements Plugin {
   }
 
   private async sendSettingsMenu(chatId: number) {
-    const aiConfig = await readAIBackend()
-    const ccLabel = aiConfig.backend === 'claude-code' ? '> Claude Code' : 'Claude Code'
-    const aiLabel = aiConfig.backend === 'vercel-ai-sdk' ? '> Vercel AI SDK' : 'Vercel AI SDK'
-    const sdkLabel = aiConfig.backend === 'agent-sdk' ? '> Agent SDK' : 'Agent SDK'
+    const config = await readAIProviderConfig()
+    const activeProfile = config.profiles[config.activeProfile]
+    const activeLabel = activeProfile ? profileLabel(config.activeProfile, activeProfile) : config.activeProfile
 
     const keyboard = new InlineKeyboard()
-      .text(ccLabel, 'provider:claude-code')
-      .text(aiLabel, 'provider:vercel-ai-sdk')
-      .text(sdkLabel, 'provider:agent-sdk')
+    for (const slug of Object.keys(config.profiles)) {
+      const prefix = slug === config.activeProfile ? '> ' : ''
+      keyboard.text(`${prefix}${slug}`, `profile:${slug}`)
+    }
 
     await this.bot!.api.sendMessage(
       chatId,
-      `Current provider: ${BACKEND_LABELS[aiConfig.backend]}\n\nChoose default AI provider:`,
+      `Current profile: ${activeLabel}\n\nChoose AI profile:`,
       { reply_markup: keyboard },
     )
   }
@@ -391,6 +441,126 @@ export class TelegramPlugin implements Plugin {
     // No text or edit failed — clean up the placeholder
     if (placeholderMsgId) {
       await this.bot!.api.deleteMessage(chatId, placeholderMsgId).catch(() => {})
+    }
+  }
+
+  // ── Trading command ──
+
+  private async handleTradingCommand(chatId: number, accountManager: AccountManager) {
+    const accounts = accountManager.resolve()
+    if (accounts.length === 0) {
+      await this.sendReply(chatId, 'No trading accounts configured.')
+      return
+    }
+
+    // Single account — skip overview, show panel directly
+    if (accounts.length === 1) {
+      const { text, keyboard } = await this.buildAccountPanel(accountManager, accounts[0].id)
+      await this.bot!.api.sendMessage(chatId, text, { reply_markup: keyboard })
+      return
+    }
+
+    // Multiple accounts — show overview with account selector
+    const { text, keyboard } = await this.buildTradingOverview(accountManager)
+    await this.bot!.api.sendMessage(chatId, text, { reply_markup: keyboard })
+  }
+
+  private async buildTradingOverview(accountManager: AccountManager): Promise<{ text: string; keyboard: InlineKeyboard }> {
+    const accounts = accountManager.resolve()
+    const lines: string[] = ['Trading Panel', '']
+    const keyboard = new InlineKeyboard()
+
+    for (const uta of accounts) {
+      const healthIcon = uta.health === 'healthy' ? '🟢' : uta.health === 'degraded' ? '🟡' : '🔴'
+      const gitStatus = uta.status()
+      const pendingTag = gitStatus.pendingMessage ? '  ⏳ pending' : ''
+      let equityStr = ''
+      try {
+        const acc = await uta.getAccount()
+        equityStr = `  $${Number(acc.netLiquidation).toFixed(0)}`
+      } catch { /* skip */ }
+      lines.push(`${healthIcon} ${uta.label}${equityStr}${pendingTag}`)
+      keyboard.text(uta.label, `trading:view:${uta.id}`)
+    }
+
+    return { text: lines.join('\n'), keyboard }
+  }
+
+  private async buildAccountPanel(accountManager: AccountManager, accountId: string): Promise<{ text: string; keyboard: InlineKeyboard }> {
+    const uta = accountManager.get(accountId)
+    if (!uta) return { text: 'Account not found.', keyboard: new InlineKeyboard() }
+
+    const healthIcon = uta.health === 'healthy' ? '🟢' : uta.health === 'degraded' ? '🟡' : '🔴'
+    const gitStatus = uta.status()
+    const lines: string[] = [`Trading · ${uta.label} ${healthIcon}`]
+
+    // Account info
+    try {
+      const acc = await uta.getAccount()
+      const pnlNum = Number(acc.unrealizedPnL)
+      const pnl = pnlNum >= 0 ? `+$${pnlNum.toFixed(0)}` : `-$${Math.abs(pnlNum).toFixed(0)}`
+      lines.push(`Equity $${Number(acc.netLiquidation).toFixed(0)}  Cash $${Number(acc.totalCashValue).toFixed(0)}  PnL ${pnl}`)
+    } catch {
+      lines.push('(account data unavailable)')
+    }
+
+    // Pending commit
+    const keyboard = new InlineKeyboard()
+    if (gitStatus.pendingMessage) {
+      lines.push('')
+      lines.push(`Pending: ${gitStatus.pendingMessage}`)
+      for (const op of gitStatus.staged) {
+        lines.push(`  ${this.formatOperation(op)}`)
+      }
+      keyboard
+        .text('Approve', `trading:push:${uta.id}`)
+        .text('Reject', `trading:reject:${uta.id}`)
+        .row()
+    } else if (gitStatus.staged.length > 0) {
+      lines.push('')
+      lines.push('Staged (not committed):')
+      for (const op of gitStatus.staged) {
+        lines.push(`  ${this.formatOperation(op)}`)
+      }
+    }
+
+    // Recent history
+    const commits = uta.log({ limit: 3 })
+    if (commits.length > 0) {
+      lines.push('')
+      lines.push('History:')
+      for (const c of commits) {
+        const ops = c.operations.map((o) => `${o.symbol} ${o.action}`).join(', ')
+        lines.push(`  ${c.hash.slice(0, 7)} ${c.message}${ops ? ` (${ops})` : ''}`)
+      }
+    }
+
+    // Back button only if multiple accounts
+    if (accountManager.size > 1) {
+      keyboard.text('← Back', 'trading:back:')
+    }
+
+    return { text: lines.join('\n'), keyboard }
+  }
+
+  private formatOperation(op: Operation): string {
+    const symbol = getOperationSymbol(op)
+    switch (op.action) {
+      case 'placeOrder': {
+        const side = op.order?.action || '?'
+        const qty = op.order?.totalQuantity
+        const cashQty = op.order?.cashQty
+        const size = (cashQty && cashQty > 0) ? `$${cashQty}` : qty ? `${qty}` : '?'
+        return `${side} ${symbol} ${size}`
+      }
+      case 'closePosition':
+        return `CLOSE ${symbol}${op.quantity ? ` (${op.quantity})` : ''}`
+      case 'modifyOrder':
+        return `MODIFY order ${op.orderId}`
+      case 'cancelOrder':
+        return `CANCEL order ${op.orderId}`
+      case 'syncOrders':
+        return 'SYNC orders'
     }
   }
 

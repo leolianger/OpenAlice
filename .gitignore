@@ -2,8 +2,6 @@ node_modules/
 dist/
 logs/
 /data/*
-!/data/default/
-!/data/default/**
 state.json
 *.log
 
@@ -33,3 +31,6 @@ packages/ibkr/ref/source/cppclient/
 packages/ibkr/ref/samples/Java/
 packages/ibkr/ref/samples/Cpp/
 packages/ibkr/ref/CMakeLists.txt
+
+# Turborepo
+.turbo/

@@ -11,6 +11,7 @@ export type {
   AccountSummary,
   AggregatedEquity,
   ContractSearchResult,
+  SnapshotHooks,
 } from './account-manager.js'
 
 // Brokers (types + implementations + factory)
@@ -21,24 +22,17 @@ export type {
   OpenOrder,
   AccountInfo,
   Quote,
-  FundingRate,
-  OrderBookLevel,
-  OrderBook,
   MarketClock,
   AccountCapabilities,
+  TpSlParams,
 } from './brokers/index.js'
-export type { IPlatform, PlatformCredentials } from './brokers/index.js'
 export {
-  createPlatformFromConfig,
-  createBrokerFromConfig,
-  validatePlatformRefs,
+  createBroker,
   AlpacaBroker,
-  AlpacaPlatform,
   CcxtBroker,
-  CcxtPlatform,
   createCcxtProviderTools,
 } from './brokers/index.js'
-export type { AlpacaBrokerConfig, AlpacaPlatformConfig, CcxtBrokerConfig, CcxtPlatformConfig } from './brokers/index.js'
+export type { AlpacaBrokerConfig, CcxtBrokerConfig } from './brokers/index.js'
 
 // Trading-as-Git
 export { TradingGit } from './git/index.js'
@@ -64,6 +58,22 @@ export type {
   PriceChangeInput,
   SimulatePriceChangeResult,
 } from './git/index.js'
+
+// Snapshots
+export {
+  createSnapshotService,
+  createSnapshotScheduler,
+  createSnapshotStore,
+  buildSnapshot,
+} from './snapshot/index.js'
+export type {
+  SnapshotService,
+  SnapshotScheduler,
+  SnapshotStore,
+  UTASnapshot,
+  SnapshotTrigger,
+  SnapshotIndex,
+} from './snapshot/index.js'
 
 // Guards
 export {

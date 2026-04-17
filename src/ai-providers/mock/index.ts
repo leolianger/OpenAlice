@@ -33,7 +33,7 @@ export interface MockAIProviderCall {
 // ==================== Options ====================
 
 export interface MockAIProviderOpts {
-  providerTag?: 'vercel-ai' | 'claude-code' | 'agent-sdk'
+  providerTag?: 'vercel-ai' | 'claude-code' | 'agent-sdk' | 'codex'
   /** Text returned by ask(). Default: 'mock-ask-result'. */
   askResult?: string
 }
@@ -41,7 +41,7 @@ export interface MockAIProviderOpts {
 // ==================== MockAIProvider ====================
 
 export class MockAIProvider implements AIProvider {
-  readonly providerTag: 'vercel-ai' | 'claude-code' | 'agent-sdk'
+  readonly providerTag: 'vercel-ai' | 'claude-code' | 'agent-sdk' | 'codex'
   readonly generateCalls: MockAIProviderCall[] = []
   readonly askCalls: string[] = []
   private _askResult: string
@@ -54,7 +54,7 @@ export class MockAIProvider implements AIProvider {
     this._askResult = opts?.askResult ?? 'mock-ask-result'
   }
 
-  async ask(prompt: string): Promise<ProviderResult> {
+  async ask(prompt: string, _profile?: unknown): Promise<ProviderResult> {
     this.askCalls.push(prompt)
     return { text: this._askResult, media: [] }
   }

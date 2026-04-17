@@ -3,7 +3,7 @@
  * Purpose: understand what Bybit demoTrading actually returns.
  */
 
-import { describe, it, beforeAll } from 'vitest'
+import { describe, it, beforeAll, beforeEach } from 'vitest'
 import type { Exchange } from 'ccxt'
 import { getTestAccounts, filterByProvider } from './setup.js'
 
@@ -18,10 +18,14 @@ beforeAll(async () => {
 }, 60_000)
 
 describe('Raw CCXT Bybit diagnostic', () => {
-  it('createOrder → inspect full response', async () => {
-    if (!exchange) return
+  beforeEach(({ skip }) => { if (!exchange) skip('no Bybit account') })
 
-    const result = await exchange.createOrder('ETH/USDT:USDT', 'market', 'buy', 0.01)
+  /** Narrow exchange type — beforeEach guarantees non-null via skip(). */
+  function e(): Exchange { return exchange! }
+
+  it('createOrder → inspect full response', async () => {
+
+    const result = await e().createOrder('ETH/USDT:USDT', 'market', 'buy', 0.01)
     console.log('\n=== createOrder response ===')
     console.log(JSON.stringify({
       id: result.id,
@@ -43,13 +47,13 @@ describe('Raw CCXT Bybit diagnostic', () => {
     }, null, 2))
 
     // Clean up
-    await exchange.createOrder('ETH/USDT:USDT', 'market', 'sell', 0.01, undefined, { reduceOnly: true }).catch(() => {})
+    await e().createOrder('ETH/USDT:USDT', 'market', 'sell', 0.01, undefined, { reduceOnly: true }).catch(() => {})
   }, 15_000)
 
   it('fetchClosedOrders → inspect ids and format', async () => {
-    if (!exchange) return
 
-    const closed = await exchange.fetchClosedOrders('ETH/USDT:USDT', undefined, 5)
+
+    const closed = await e().fetchClosedOrders('ETH/USDT:USDT', undefined, 5)
     console.log(`\n=== fetchClosedOrders: ${closed.length} orders ===`)
     for (const o of closed) {
       console.log(JSON.stringify({
@@ -67,9 +71,9 @@ describe('Raw CCXT Bybit diagnostic', () => {
   }, 15_000)
 
   it('fetchOpenOrders → inspect', async () => {
-    if (!exchange) return
 
-    const open = await exchange.fetchOpenOrders('ETH/USDT:USDT')
+
+    const open = await e().fetchOpenOrders('ETH/USDT:USDT')
     console.log(`\n=== fetchOpenOrders: ${open.length} orders ===`)
     for (const o of open) {
       console.log(JSON.stringify({
@@ -83,21 +87,21 @@ describe('Raw CCXT Bybit diagnostic', () => {
   }, 15_000)
 
   it('compare orderId format: spot vs perp', async () => {
-    if (!exchange) return
 
-    const hasSpot = !!exchange.markets['ETH/USDT']
-    const hasPerp = !!exchange.markets['ETH/USDT:USDT']
+
+    const hasSpot = !!e().markets['ETH/USDT']
+    const hasPerp = !!e().markets['ETH/USDT:USDT']
     console.log(`\n=== spot ETH/USDT exists: ${hasSpot}, perp ETH/USDT:USDT exists: ${hasPerp} ===`)
 
     if (hasPerp) {
-      const perpOrder = await exchange.createOrder('ETH/USDT:USDT', 'market', 'buy', 0.01)
+      const perpOrder = await e().createOrder('ETH/USDT:USDT', 'market', 'buy', 0.01)
       console.log(`perp orderId: ${perpOrder.id} (type: ${typeof perpOrder.id})`)
-      await exchange.createOrder('ETH/USDT:USDT', 'market', 'sell', 0.01, undefined, { reduceOnly: true }).catch(() => {})
+      await e().createOrder('ETH/USDT:USDT', 'market', 'sell', 0.01, undefined, { reduceOnly: true }).catch(() => {})
     }
 
     if (hasSpot) {
       try {
-        const spotOrder = await exchange.createOrder('ETH/USDT', 'market', 'buy', 0.01)
+        const spotOrder = await e().createOrder('ETH/USDT', 'market', 'buy', 0.01)
         console.log(`spot orderId: ${spotOrder.id} (type: ${typeof spotOrder.id})`)
       } catch (err: any) {
         console.log(`spot order failed: ${err.message}`)
@@ -106,8 +110,8 @@ describe('Raw CCXT Bybit diagnostic', () => {
   }, 30_000)
 
   it('check market.id vs market.symbol for ETH perps', async () => {
-    if (!exchange) return
-    const candidates = Object.values(exchange.markets).filter(
+
+    const candidates = Object.values(e().markets).filter(
       m => m.base === 'ETH' && m.quote === 'USDT',
     )
     console.log('\n=== ETH/USDT markets ===')
@@ -117,10 +121,10 @@ describe('Raw CCXT Bybit diagnostic', () => {
   })
 
   it('fetchClosedOrders: no limit vs with since', async () => {
-    if (!exchange) return
+
 
     // 1. No limit — how many do we get?
-    const noLimit = await exchange.fetchClosedOrders('ETH/USDT:USDT')
+    const noLimit = await e().fetchClosedOrders('ETH/USDT:USDT')
     console.log(`\n=== fetchClosedOrders (no limit): ${noLimit.length} orders ===`)
     if (noLimit.length > 0) {
       console.log(`  oldest: ${noLimit[0].datetime} id=${noLimit[0].id}`)
@@ -129,23 +133,23 @@ describe('Raw CCXT Bybit diagnostic', () => {
 
     // 2. With since = 2 minutes ago
     const since = Date.now() - 2 * 60 * 1000
-    const recent = await exchange.fetchClosedOrders('ETH/USDT:USDT', since)
+    const recent = await e().fetchClosedOrders('ETH/USDT:USDT', since)
     console.log(`\nfetchClosedOrders (since 2min ago): ${recent.length} orders`)
     for (const o of recent.slice(0, 5)) {
       console.log(`  id=${o.id} status=${o.status} datetime=${o.datetime}`)
     }
 
     // 3. Place an order, then query with since
-    const placed = await exchange.createOrder('ETH/USDT:USDT', 'market', 'buy', 0.01)
+    const placed = await e().createOrder('ETH/USDT:USDT', 'market', 'buy', 0.01)
     console.log(`\nplaced: ${placed.id}`)
     await new Promise(r => setTimeout(r, 500))
 
-    const afterPlace = await exchange.fetchClosedOrders('ETH/USDT:USDT', Date.now() - 10_000)
+    const afterPlace = await e().fetchClosedOrders('ETH/USDT:USDT', Date.now() - 10_000)
     console.log(`fetchClosedOrders (since 10s ago): ${afterPlace.length} orders`)
     const found = afterPlace.find(o => o.id === placed.id)
     console.log(`match: ${found ? `FOUND status=${found.status}` : 'NOT FOUND'}`)
 
     // Clean up
-    await exchange.createOrder('ETH/USDT:USDT', 'market', 'sell', 0.01, undefined, { reduceOnly: true }).catch(() => {})
+    await e().createOrder('ETH/USDT:USDT', 'market', 'sell', 0.01, undefined, { reduceOnly: true }).catch(() => {})
   }, 30_000)
 })

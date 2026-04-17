@@ -104,7 +104,7 @@ describe('AlpacaBroker — placeOrder()', () => {
       }),
     }
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
     contract.secType = 'STK'
     contract.exchange = 'NASDAQ'
@@ -148,7 +148,7 @@ describe('AlpacaBroker — precision', () => {
       createOrder: vi.fn().mockResolvedValue({ id: 'ord-p', status: 'new' }),
     }
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
     contract.secType = 'STK'
     contract.exchange = 'NASDAQ'
@@ -183,10 +183,10 @@ describe('AlpacaBroker — getPositions()', () => {
     expect(positions).toHaveLength(1)
     expect(positions[0].contract.symbol).toBe('AAPL')
     expect(positions[0].quantity.toNumber()).toBe(10)
-    expect(positions[0].avgCost).toBe(150)
-    expect(positions[0].marketPrice).toBe(160)
-    expect(positions[0].marketValue).toBe(1600)
-    expect(positions[0].unrealizedPnL).toBe(100)
+    expect(positions[0].avgCost).toBe('150')
+    expect(positions[0].marketPrice).toBe('160')
+    expect(positions[0].marketValue).toBe('1600')
+    expect(positions[0].unrealizedPnL).toBe('100')
     expect(positions[0].side).toBe('long')
   })
 })
@@ -199,7 +199,7 @@ describe('AlpacaBroker — getContractDetails()', () => {
   it('returns ContractDetails for a valid symbol', async () => {
     const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
     const query = new Contract()
-    query.aliceId = 'alpaca-AAPL'
+    query.aliceId = 'alpaca-paper|AAPL'
     query.symbol = 'AAPL'
 
     const details = await acc.getContractDetails(query)
@@ -269,29 +269,85 @@ describe('AlpacaBroker — modifyOrder()', () => {
   })
 })
 
+// ==================== modifyOrder — null-check safety ====================
+
+describe('AlpacaBroker — modifyOrder null-check', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('does not send undefined lmtPrice/auxPrice/trailingPercent when only qty changes', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
+    const replaceOrder = vi.fn().mockResolvedValue({ id: 'ord-mod', status: 'accepted' })
+    ;(acc as any).client = { replaceOrder }
+
+    // Partial<Order> — only totalQuantity set, everything else is undefined
+    const changes: Partial<Order> = { totalQuantity: new Decimal(20) }
+
+    await acc.modifyOrder('ord-1', changes)
+    const patch = replaceOrder.mock.calls[0][1]
+
+    expect(patch.qty).toBe(20)
+    // These should NOT be in the patch — they were undefined, not UNSET_DOUBLE
+    expect(patch).not.toHaveProperty('limit_price')
+    expect(patch).not.toHaveProperty('stop_price')
+    expect(patch).not.toHaveProperty('trail')
+  })
+
+  it('sends lmtPrice when explicitly set in changes', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
+    const replaceOrder = vi.fn().mockResolvedValue({ id: 'ord-mod', status: 'accepted' })
+    ;(acc as any).client = { replaceOrder }
+
+    const changes: Partial<Order> = { lmtPrice: 155.50 }
+
+    await acc.modifyOrder('ord-1', changes)
+    const patch = replaceOrder.mock.calls[0][1]
+
+    expect(patch.limit_price).toBe(155.50)
+    expect(patch).not.toHaveProperty('stop_price')
+    expect(patch).not.toHaveProperty('trail')
+  })
+
+  it('sends auxPrice as stop_price when explicitly set', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
+    const replaceOrder = vi.fn().mockResolvedValue({ id: 'ord-mod', status: 'accepted' })
+    ;(acc as any).client = { replaceOrder }
+
+    const changes: Partial<Order> = { auxPrice: 140 }
+
+    await acc.modifyOrder('ord-1', changes)
+    const patch = replaceOrder.mock.calls[0][1]
+
+    expect(patch.stop_price).toBe(140)
+    expect(patch).not.toHaveProperty('limit_price')
+  })
+})
+
 // ==================== cancelOrder ====================
 
 describe('AlpacaBroker — cancelOrder()', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('returns true on success', async () => {
+  it('returns PlaceOrderResult with Cancelled status on success', async () => {
     const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
     ;(acc as any).client = {
       cancelOrder: vi.fn().mockResolvedValue(undefined),
     }
 
     const result = await acc.cancelOrder('ord-1')
-    expect(result).toBe(true)
+    expect(result.success).toBe(true)
+    expect(result.orderId).toBe('ord-1')
+    expect(result.orderState?.status).toBe('Cancelled')
   })
 
-  it('returns false on API failure', async () => {
+  it('returns PlaceOrderResult with error on API failure', async () => {
     const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
     ;(acc as any).client = {
       cancelOrder: vi.fn().mockRejectedValue(new Error('Cannot cancel')),
     }
 
     const result = await acc.cancelOrder('ord-1')
-    expect(result).toBe(false)
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Cannot cancel')
   })
 })
 
@@ -309,7 +365,7 @@ describe('AlpacaBroker — closePosition()', () => {
     }
 
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
 
     const result = await acc.closePosition(contract)
@@ -338,7 +394,7 @@ describe('AlpacaBroker — closePosition()', () => {
     }
 
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
 
     const result = await acc.closePosition(contract, new Decimal(3))
@@ -390,10 +446,10 @@ describe('AlpacaBroker — getAccount()', () => {
     }
 
     const info = await acc.getAccount()
-    expect(info.netLiquidation).toBe(100000)
-    expect(info.totalCashValue).toBe(50000)
-    expect(info.buyingPower).toBe(200000)
-    expect(info.unrealizedPnL).toBe(350) // 100 + 250
+    expect(info.netLiquidation).toBe('100000')
+    expect(info.totalCashValue).toBe('50000')
+    expect(info.buyingPower).toBe('200000')
+    expect(info.unrealizedPnL).toBe('350') // 100 + 250
     expect(info.realizedPnL).toBeUndefined()
     expect(info.dayTradesRemaining).toBe(2) // 3 - 1
   })
@@ -416,7 +472,7 @@ describe('AlpacaBroker — getAccount() precision', () => {
 
     const info = await acc.getAccount()
     // 0.1 + 0.2 + 0.3 = 0.6 (with floats: 0.6000000000000001)
-    expect(info.unrealizedPnL).toBe(0.6)
+    expect(info.unrealizedPnL).toBe('0.6')
   })
 })
 
@@ -511,6 +567,71 @@ describe('AlpacaBroker — getOrder()', () => {
     // IBKR orderId is number — UUID can't fit, so it should be 0
     expect(result!.order.orderId).toBe(0)
   })
+
+  it('extracts tpsl from bracket order legs', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
+    ;(acc as any).client = {
+      getOrder: vi.fn().mockResolvedValue({
+        id: 'ord-bracket', symbol: 'AAPL', side: 'buy', qty: '10', notional: null,
+        type: 'market', limit_price: null, stop_price: null,
+        time_in_force: 'day', extended_hours: false,
+        status: 'filled', reject_reason: null,
+        order_class: 'bracket',
+        legs: [
+          { id: 'tp-1', symbol: 'AAPL', side: 'sell', qty: '10', notional: null,
+            type: 'limit', limit_price: '160.00', stop_price: null,
+            time_in_force: 'gtc', extended_hours: false, status: 'new', reject_reason: null },
+          { id: 'sl-1', symbol: 'AAPL', side: 'sell', qty: '10', notional: null,
+            type: 'stop', limit_price: null, stop_price: '140.00',
+            time_in_force: 'gtc', extended_hours: false, status: 'new', reject_reason: null },
+        ],
+      }),
+    }
+
+    const result = await acc.getOrder('ord-bracket')
+    expect(result!.tpsl).toEqual({
+      takeProfit: { price: '160.00' },
+      stopLoss: { price: '140.00' },
+    })
+  })
+
+  it('extracts stop-limit SL with limitPrice', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
+    ;(acc as any).client = {
+      getOrder: vi.fn().mockResolvedValue({
+        id: 'ord-stp-lmt', symbol: 'AAPL', side: 'buy', qty: '10', notional: null,
+        type: 'market', limit_price: null, stop_price: null,
+        time_in_force: 'day', extended_hours: false,
+        status: 'filled', reject_reason: null,
+        order_class: 'bracket',
+        legs: [
+          { id: 'sl-2', symbol: 'AAPL', side: 'sell', qty: '10', notional: null,
+            type: 'stop_limit', limit_price: '139.50', stop_price: '140.00',
+            time_in_force: 'gtc', extended_hours: false, status: 'new', reject_reason: null },
+        ],
+      }),
+    }
+
+    const result = await acc.getOrder('ord-stp-lmt')
+    expect(result!.tpsl).toEqual({
+      stopLoss: { price: '140.00', limitPrice: '139.50' },
+    })
+  })
+
+  it('returns no tpsl for simple (non-bracket) orders', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
+    ;(acc as any).client = {
+      getOrder: vi.fn().mockResolvedValue({
+        id: 'ord-simple', symbol: 'AAPL', side: 'buy', qty: '10', notional: null,
+        type: 'market', limit_price: null, stop_price: null,
+        time_in_force: 'day', extended_hours: false,
+        status: 'filled', reject_reason: null,
+      }),
+    }
+
+    const result = await acc.getOrder('ord-simple')
+    expect(result!.tpsl).toBeUndefined()
+  })
 })
 
 // ==================== getQuote ====================
@@ -529,7 +650,7 @@ describe('AlpacaBroker — getQuote()', () => {
     }
 
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
 
     const quote = await acc.getQuote(contract)

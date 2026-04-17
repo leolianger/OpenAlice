@@ -31,6 +31,45 @@ body,
   height: 100%;
 }
 
+/* ==================== Button utility classes ==================== */
+
+.btn-primary {
+  @apply px-4 py-2 text-[13px] font-medium rounded-lg
+    bg-bg-tertiary border border-border text-text
+    hover:border-accent/40 hover:bg-bg-tertiary/80 transition-all active:scale-[0.98]
+    disabled:opacity-40 disabled:cursor-default cursor-pointer
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg;
+}
+
+.btn-secondary {
+  @apply px-4 py-2 text-[13px] font-medium rounded-lg border border-border text-text-muted
+    hover:bg-bg-tertiary hover:text-text transition-all active:scale-[0.98]
+    disabled:opacity-40 disabled:cursor-default cursor-pointer
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg;
+}
+
+.btn-danger {
+  @apply px-4 py-2 text-[13px] font-medium rounded-lg border border-red/30 text-red
+    hover:bg-red/10 transition-all active:scale-[0.98]
+    disabled:opacity-40 disabled:cursor-default cursor-pointer
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg;
+}
+
+.btn-primary-sm {
+  @apply px-3 py-1.5 text-xs font-medium rounded-md
+    bg-bg-tertiary border border-border text-text
+    hover:border-accent/40 hover:bg-bg-tertiary/80 transition-all active:scale-[0.98]
+    disabled:opacity-40 disabled:cursor-default cursor-pointer
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-1 focus-visible:ring-offset-bg;
+}
+
+.btn-secondary-sm {
+  @apply px-3 py-1.5 text-xs font-medium rounded-md border border-border text-text-muted
+    hover:bg-bg-tertiary hover:text-text transition-all active:scale-[0.98]
+    disabled:opacity-40 disabled:cursor-default cursor-pointer
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-1 focus-visible:ring-offset-bg;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
@@ -225,4 +264,70 @@ body,
   margin-top: 0 !important;
   border-top-left-radius: 0 !important;
   border-top-right-radius: 0 !important;
+}
+
+/* ==================== Automation Flow (React Flow) ==================== */
+
+/* Event-type nodes (inputs + outputs) */
+.react-flow__node.flow-event-node {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  min-width: 140px;
+  text-align: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* Listener nodes (middle column) */
+.react-flow__node.flow-listener-node {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text);
+  border: 1px solid var(--color-accent);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 200px;
+  text-align: center;
+  box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.1);
+}
+
+/* Pulse animation when an event of this type fires */
+.react-flow__node.flow-pulse {
+  animation: flow-pulse 800ms ease-out;
+  border-color: var(--color-accent);
+}
+@keyframes flow-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.6);
+    border-color: var(--color-accent);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgba(88, 166, 255, 0);
+    border-color: var(--color-border);
+  }
+}
+
+/* React Flow background + controls theming */
+.react-flow__controls {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.react-flow__controls-button {
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+.react-flow__controls-button:hover {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text);
+}
+.react-flow__controls-button svg {
+  fill: currentColor;
 }

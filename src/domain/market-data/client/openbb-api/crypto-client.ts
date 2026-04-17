@@ -7,6 +7,7 @@
 
 import type { OBBjectResponse } from '../../crypto/types/index'
 import { buildCredentialsHeader } from '../../credential-map'
+import type { CryptoHistoricalData, CryptoSearchData } from '@traderalice/opentypebb'
 
 export class OpenBBCryptoClient {
   private baseUrl: string
@@ -22,13 +23,13 @@ export class OpenBBCryptoClient {
   // ==================== Price ====================
 
   async getHistorical(params: Record<string, unknown>) {
-    return this.request('/price/historical', params)
+    return this.request<CryptoHistoricalData>('/price/historical', params)
   }
 
   // ==================== Search ====================
 
   async search(params: Record<string, unknown>) {
-    return this.request('/search', params)
+    return this.request<CryptoSearchData>('/search', params)
   }
 
   // ==================== Internal ====================

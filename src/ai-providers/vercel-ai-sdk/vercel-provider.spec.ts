@@ -2,137 +2,119 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { VercelAIProvider } from './vercel-provider.js'
 
 vi.mock('./model-factory.js', () => ({
-  createModelFromConfig: vi.fn(),
+  createModelFromProfile: vi.fn(),
+}))
+
+vi.mock('../../core/config.js', () => ({
+  resolveProfile: vi.fn().mockResolvedValue({ backend: 'vercel-ai-sdk', label: 'Test', model: 'mock-model', provider: 'anthropic' }),
 }))
 
 vi.mock('./agent.js', () => ({
-  createAgent: vi.fn(),
+  generateText: vi.fn(),
+  stepCountIs: vi.fn().mockReturnValue(() => false),
 }))
 
 vi.mock('../../core/media.js', () => ({
   extractMediaFromToolOutput: vi.fn().mockReturnValue([]),
 }))
 
-import { createModelFromConfig } from './model-factory.js'
-import { createAgent } from './agent.js'
+import { createModelFromProfile } from './model-factory.js'
+import { generateText } from './agent.js'
 
-const mockCreateModelFromConfig = vi.mocked(createModelFromConfig)
-const mockCreateAgent = vi.mocked(createAgent)
+const mockCreateModelFromProfile = vi.mocked(createModelFromProfile)
+const mockGenerateText = vi.mocked(generateText)
 
 // ==================== Helpers ====================
 
-function makeAgent(text = 'ok', steps: any[] = []) {
-  return {
-    generate: vi.fn().mockResolvedValue({ text, steps }),
-  }
-}
-
 function makeProvider(overrides?: { getTools?: () => Promise<Record<string, any>> }) {
   const getTools = overrides?.getTools ?? (async () => ({ toolA: {}, toolB: {} }))
-  return new VercelAIProvider(getTools as any, 'You are a trading assistant.', 10)
+  return new VercelAIProvider(getTools as any, async () => 'You are a trading assistant.', 10)
 }
 
-// ==================== resolveAgent caching ====================
+// ==================== ask() ====================
 
-describe('VercelAIProvider — agent caching', () => {
+describe('VercelAIProvider — ask()', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
-    mockCreateAgent.mockReturnValue(makeAgent() as any)
+    mockCreateModelFromProfile.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
+    mockGenerateText.mockResolvedValue({ text: 'ok', steps: [] } as any)
   })
 
-  it('creates agent on first ask()', async () => {
+  it('calls generateText with model, tools, system, and prompt', async () => {
     const provider = makeProvider()
     await provider.ask('hello')
-    expect(mockCreateAgent).toHaveBeenCalledOnce()
+
+    expect(mockGenerateText).toHaveBeenCalledOnce()
+    const call = mockGenerateText.mock.calls[0][0]
+    expect(call).toHaveProperty('prompt', 'hello')
+    expect(call).toHaveProperty('system', 'You are a trading assistant.')
+    expect(call.tools).toHaveProperty('toolA')
+    expect(call.tools).toHaveProperty('toolB')
   })
 
-  it('reuses cached agent on second ask() when nothing changes', async () => {
+  it('returns text from generateText result', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'the answer', steps: [] } as any)
     const provider = makeProvider()
-    await provider.ask('first')
-    await provider.ask('second')
-    expect(mockCreateAgent).toHaveBeenCalledOnce()
+    const result = await provider.ask('question')
+    expect(result.text).toBe('the answer')
   })
 
-  it('recreates agent when config key changes', async () => {
+  it('returns empty string when text is null', async () => {
+    mockGenerateText.mockResolvedValue({ text: null, steps: [] } as any)
     const provider = makeProvider()
-    await provider.ask('first')
-    // Simulate config key change
-    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'claude-3-5-sonnet' })
-    await provider.ask('second')
-    expect(mockCreateAgent).toHaveBeenCalledTimes(2)
-  })
-
-  it('recreates agent when tool count changes', async () => {
-    let toolSet: Record<string, any> = { toolA: {}, toolB: {} }
-    const provider = new VercelAIProvider(async () => toolSet as any, 'prompt', 5)
-    await provider.ask('first')
-    toolSet = { toolA: {}, toolB: {}, toolC: {} }
-    await provider.ask('second')
-    expect(mockCreateAgent).toHaveBeenCalledTimes(2)
+    const result = await provider.ask('question')
+    expect(result.text).toBe('')
   })
 })
 
-// ==================== per-request overrides ====================
+// ==================== generate() — tool filtering ====================
 
-describe('VercelAIProvider — per-request overrides', () => {
+describe('VercelAIProvider — generate() tool filtering', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
-    mockCreateAgent.mockReturnValue(makeAgent() as any)
+    mockCreateModelFromProfile.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
+    mockGenerateText.mockResolvedValue({ text: 'ok', steps: [] } as any)
   })
 
-  it('skips cache and uses filtered tools when disabledTools provided', async () => {
+  it('filters disabled tools from generateText call', async () => {
     const getTools = async () => ({ toolA: {} as any, toolB: {} as any, toolC: {} as any })
-    const provider = new VercelAIProvider(getTools, 'prompt', 5)
-    // warm cache
-    await provider.ask('warm')
-    vi.clearAllMocks()
-    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
-    mockCreateAgent.mockReturnValue(makeAgent() as any)
+    const provider = new VercelAIProvider(getTools, async () => 'prompt', 5)
 
-    // generate with disabledTools
     const events = []
     for await (const e of provider.generate([], 'test', { disabledTools: ['toolB'] })) {
       events.push(e)
     }
 
-    expect(mockCreateAgent).toHaveBeenCalledOnce()
-    // The tools passed to createAgent should exclude toolB
-    const toolsArg = mockCreateAgent.mock.calls[0][1]
-    expect(Object.keys(toolsArg)).toContain('toolA')
-    expect(Object.keys(toolsArg)).not.toContain('toolB')
-    expect(Object.keys(toolsArg)).toContain('toolC')
+    const call = mockGenerateText.mock.calls[0][0]
+    const toolNames = Object.keys(call.tools!)
+    expect(toolNames).toContain('toolA')
+    expect(toolNames).not.toContain('toolB')
+    expect(toolNames).toContain('toolC')
   })
 
-  it('skips cache when modelOverride is provided', async () => {
+  it('passes profile to createModelFromProfile', async () => {
     const provider = makeProvider()
-    await provider.ask('warm')
-    vi.clearAllMocks()
-    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
-    mockCreateAgent.mockReturnValue(makeAgent() as any)
+    const profile = { backend: 'vercel-ai-sdk' as const, label: 'Test', model: 'claude-3-7', provider: 'anthropic' }
 
-    for await (const _ of provider.generate([], 'test', { vercelAiSdk: { modelId: 'claude-3-7' } as any })) {
+    for await (const _ of provider.generate([], 'test', { profile })) {
       // drain
     }
 
-    expect(mockCreateAgent).toHaveBeenCalledOnce()
+    expect(mockCreateModelFromProfile).toHaveBeenCalledWith(profile)
   })
 })
 
-// ==================== generate() behavior ====================
+// ==================== generate() — events ====================
 
-describe('VercelAIProvider — generate()', () => {
+describe('VercelAIProvider — generate() events', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockCreateModelFromConfig.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
-    mockCreateAgent.mockReturnValue(makeAgent() as any)
+    mockCreateModelFromProfile.mockResolvedValue({ model: {} as any, key: 'gpt-4o' })
   })
 
   it('yields done event with text from result', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'final answer', steps: [] } as any)
     const provider = makeProvider()
-    const agent = makeAgent('final answer')
-    mockCreateAgent.mockReturnValue(agent as any)
 
     const events = []
     for await (const e of provider.generate([], 'test')) {
@@ -143,9 +125,8 @@ describe('VercelAIProvider — generate()', () => {
     expect(done?.result.text).toBe('final answer')
   })
 
-  it('propagates agent error through channel', async () => {
-    const agent = { generate: vi.fn().mockRejectedValue(new Error('model error')) }
-    mockCreateAgent.mockReturnValue(agent as any)
+  it('propagates error through channel', async () => {
+    mockGenerateText.mockRejectedValue(new Error('model error'))
     const provider = makeProvider()
 
     await expect(async () => {
@@ -153,5 +134,17 @@ describe('VercelAIProvider — generate()', () => {
         // drain
       }
     }).rejects.toThrow('model error')
+  })
+
+  it('uses per-channel systemPrompt override', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'ok', steps: [] } as any)
+    const provider = makeProvider()
+
+    for await (const _ of provider.generate([], 'test', { systemPrompt: 'custom prompt' })) {
+      // drain
+    }
+
+    const call = mockGenerateText.mock.calls[0][0]
+    expect(call.system).toBe('custom prompt')
   })
 })

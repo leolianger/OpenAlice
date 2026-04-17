@@ -18,18 +18,15 @@ vi.mock('fs/promises', () => ({
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import {
   readAIProviderConfig,
-  readAIBackend,
-  writeAIBackend,
+  setActiveProfile,
   readToolsConfig,
   readAgentConfig,
   readMarketDataConfig,
-  loadTradingConfig,
   writeConfigSection,
-  readPlatformsConfig,
   readAccountsConfig,
-  writePlatformsConfig,
   writeAccountsConfig,
   aiProviderSchema,
+  profileSchema,
 } from './config.js'
 
 const mockReadFile = vi.mocked(readFile)
@@ -65,74 +62,55 @@ describe('readAIProviderConfig', () => {
   it('returns schema defaults when file is missing', async () => {
     fileNotFound()
     const cfg = await readAIProviderConfig()
-    expect(cfg.backend).toBe('claude-code')
-    expect(cfg.provider).toBe('anthropic')
-    expect(cfg.model).toBe('claude-sonnet-4-6')
+    expect(cfg.activeProfile).toBe('default')
+    expect(cfg.profiles.default).toBeDefined()
+    expect(cfg.profiles.default.backend).toBe('agent-sdk')
   })
 
-  it('parses valid file content', async () => {
-    fileReturns({ backend: 'vercel-ai-sdk', provider: 'openai', model: 'gpt-4o' })
+  it('parses valid profile-based content', async () => {
+    fileReturns({
+      apiKeys: { openai: 'sk-test' },
+      profiles: { main: { backend: 'codex', label: 'GPT', model: 'gpt-5.4', loginMethod: 'codex-oauth' } },
+      activeProfile: 'main',
+    })
     const cfg = await readAIProviderConfig()
-    expect(cfg.backend).toBe('vercel-ai-sdk')
-    expect(cfg.provider).toBe('openai')
-    expect(cfg.model).toBe('gpt-4o')
+    expect(cfg.activeProfile).toBe('main')
+    expect(cfg.profiles.main.backend).toBe('codex')
+    expect(cfg.profiles.main.model).toBe('gpt-5.4')
   })
 
   it('returns defaults when file contains invalid JSON (parse error)', async () => {
     fileReadError('Unexpected token')
     const cfg = await readAIProviderConfig()
-    expect(cfg.backend).toBe('claude-code')
-  })
-
-  it('fills in missing fields with schema defaults', async () => {
-    fileReturns({ backend: 'agent-sdk' })
-    const cfg = await readAIProviderConfig()
-    expect(cfg.backend).toBe('agent-sdk')
-    expect(cfg.provider).toBe('anthropic')   // default
-    expect(cfg.model).toBe('claude-sonnet-4-6') // default
+    expect(cfg.activeProfile).toBe('default')
   })
 })
 
-// ==================== readAIBackend ====================
+// ==================== setActiveProfile ====================
 
-describe('readAIBackend', () => {
-  it('returns claude-code backend by default', async () => {
-    fileNotFound()
-    const { backend } = await readAIBackend()
-    expect(backend).toBe('claude-code')
-  })
+describe('setActiveProfile', () => {
+  it('updates activeProfile and writes to disk', async () => {
+    const config = {
+      apiKeys: {},
+      profiles: {
+        a: { backend: 'agent-sdk', label: 'A', model: 'claude-sonnet-4-6', loginMethod: 'api-key' },
+        b: { backend: 'codex', label: 'B', model: 'gpt-5.4', loginMethod: 'codex-oauth' },
+      },
+      activeProfile: 'a',
+    }
+    fileReturns(config)
 
-  it('returns the backend stored in file', async () => {
-    fileReturns({ backend: 'vercel-ai-sdk' })
-    const { backend } = await readAIBackend()
-    expect(backend).toBe('vercel-ai-sdk')
-  })
-})
+    await setActiveProfile('b')
 
-// ==================== writeAIBackend ====================
-
-describe('writeAIBackend', () => {
-  it('reads current config and overwrites only the backend field', async () => {
-    // First read: return existing config with custom model
-    fileReturns({ backend: 'claude-code', provider: 'anthropic', model: 'my-custom-model' })
-
-    await writeAIBackend('vercel-ai-sdk')
-
-    expect(mockMkdir).toHaveBeenCalled()
     expect(mockWriteFile).toHaveBeenCalled()
-
     const written = JSON.parse((mockWriteFile.mock.calls[0][1] as string))
-    expect(written.backend).toBe('vercel-ai-sdk')
-    expect(written.model).toBe('my-custom-model') // preserved
-    expect(written.provider).toBe('anthropic')    // preserved
+    expect(written.activeProfile).toBe('b')
+    expect(written.profiles.a).toBeDefined() // preserved
   })
 
-  it('writes to ai-provider-manager.json', async () => {
-    fileReturns({ backend: 'agent-sdk' })
-    await writeAIBackend('claude-code')
-
-    const filePath = mockWriteFile.mock.calls[0][0] as string
-    expect(filePath).toMatch(/ai-provider-manager\.json$/)
+  it('throws on unknown profile slug', async () => {
+    fileReturns({ apiKeys: {}, profiles: { a: { backend: 'agent-sdk', label: 'A', model: 'x' } }, activeProfile: 'a' })
+    await expect(setActiveProfile('nonexistent')).rejects.toThrow('Unknown profile')
   })
 })
 
@@ -214,7 +192,7 @@ describe('writeConfigSection', () => {
 
   it('throws ZodError for invalid data (does not write file)', async () => {
     await expect(
-      writeConfigSection('aiProvider', { backend: 'invalid-backend-name' })
+      writeConfigSection('aiProvider', { profiles: { bad: { backend: 'invalid-backend', label: 'X' } } })
     ).rejects.toThrow()
     // writeFile should not have been called
     expect(mockWriteFile).not.toHaveBeenCalled()
@@ -227,165 +205,86 @@ describe('writeConfigSection', () => {
   })
 })
 
-// ==================== readPlatformsConfig / writeAccountsConfig ====================
-
-describe('readPlatformsConfig', () => {
-  it('returns empty array when file is missing', async () => {
-    const enoent = new Error('ENOENT') as NodeJS.ErrnoException
-    enoent.code = 'ENOENT'
-    mockReadFile.mockRejectedValueOnce(enoent)
-    const platforms = await readPlatformsConfig()
-    expect(platforms).toEqual([])
-  })
-
-  it('parses platforms from file', async () => {
-    fileReturns([{ id: 'bybit-platform', type: 'ccxt', exchange: 'bybit' }])
-    const platforms = await readPlatformsConfig()
-    expect(platforms).toHaveLength(1)
-    expect(platforms[0].type).toBe('ccxt')
-    expect((platforms[0] as any).exchange).toBe('bybit')
-  })
-})
+// ==================== readAccountsConfig / writeAccountsConfig ====================
 
 describe('readAccountsConfig', () => {
-  it('returns empty array when file is missing', async () => {
+  it('returns empty array and seeds file when missing', async () => {
     const enoent = new Error('ENOENT') as NodeJS.ErrnoException
     enoent.code = 'ENOENT'
     mockReadFile.mockRejectedValueOnce(enoent)
     const accounts = await readAccountsConfig()
     expect(accounts).toEqual([])
+    // Should seed empty accounts.json
+    expect(mockWriteFile).toHaveBeenCalledTimes(1)
   })
 
-  it('parses accounts from file', async () => {
-    fileReturns([{ id: 'bybit-main', platformId: 'bybit-platform', apiKey: 'key1', apiSecret: 'sec1' }])
+  it('parses ccxt account from file', async () => {
+    fileReturns([{ id: 'bybit-main', type: 'ccxt', exchange: 'bybit', apiKey: 'key1', apiSecret: 'sec1' }])
     const accounts = await readAccountsConfig()
     expect(accounts).toHaveLength(1)
     expect(accounts[0].id).toBe('bybit-main')
-    expect(accounts[0].platformId).toBe('bybit-platform')
-  })
-})
-
-describe('writePlatformsConfig', () => {
-  it('writes validated platforms to platforms.json', async () => {
-    await writePlatformsConfig([{ id: 'alpaca-platform', type: 'alpaca', paper: true }])
-    const filePath = mockWriteFile.mock.calls[0][0] as string
-    expect(filePath).toMatch(/platforms\.json$/)
-    const written = JSON.parse(mockWriteFile.mock.calls[0][1] as string)
-    expect(written[0].type).toBe('alpaca')
+    expect(accounts[0].type).toBe('ccxt')
   })
 
-  it('throws ZodError for invalid platform type', async () => {
-    await expect(
-      writePlatformsConfig([{ id: 'bad', type: 'unknown-type' } as any])
-    ).rejects.toThrow()
-    expect(mockWriteFile).not.toHaveBeenCalled()
+  it('parses alpaca account from file', async () => {
+    fileReturns([{ id: 'alpaca-paper', type: 'alpaca', paper: true, apiKey: 'k', apiSecret: 's' }])
+    const accounts = await readAccountsConfig()
+    expect(accounts).toHaveLength(1)
+    expect(accounts[0].type).toBe('alpaca')
   })
 })
 
 describe('writeAccountsConfig', () => {
   it('writes validated accounts to accounts.json', async () => {
-    await writeAccountsConfig([{ id: 'acc-1', platformId: 'plat-1', guards: [] }])
+    await writeAccountsConfig([{ id: 'acc-1', type: 'alpaca', enabled: true, guards: [], brokerConfig: { paper: true } }])
     const filePath = mockWriteFile.mock.calls[0][0] as string
     expect(filePath).toMatch(/accounts\.json$/)
   })
-})
 
-// ==================== loadTradingConfig ====================
-
-describe('loadTradingConfig', () => {
-  it('returns platforms + accounts directly when both files exist', async () => {
-    // platforms.json
-    fileReturns([{ id: 'bybit-p', type: 'ccxt', exchange: 'bybit' }])
-    // accounts.json
-    fileReturns([{ id: 'bybit-main', platformId: 'bybit-p' }])
-
-    const { platforms, accounts } = await loadTradingConfig()
-    expect(platforms).toHaveLength(1)
-    expect(platforms[0].id).toBe('bybit-p')
-    expect(accounts).toHaveLength(1)
-    expect(accounts[0].id).toBe('bybit-main')
-    // No migration write should occur
+  it('throws ZodError for missing required fields', async () => {
+    await expect(
+      writeAccountsConfig([{ type: 'alpaca' } as any])
+    ).rejects.toThrow()
     expect(mockWriteFile).not.toHaveBeenCalled()
-  })
-
-  it('migrates from crypto.json + securities.json when platforms.json is missing', async () => {
-    // platforms.json → ENOENT
-    fileNotFound()
-    // accounts.json → ENOENT
-    fileNotFound()
-    // crypto.json (loaded inside migrateLegacyTradingConfig)
-    fileReturns({
-      provider: {
-        type: 'ccxt',
-        exchange: 'binance',
-        apiKey: 'k1',
-        apiSecret: 's1',
-        sandbox: false,
-        demoTrading: false,
-      },
-      guards: [],
-    })
-    // securities.json
-    fileReturns({
-      provider: { type: 'alpaca', paper: true, apiKey: 'alpk', secretKey: 'alps' },
-      guards: [],
-    })
-
-    const { platforms, accounts } = await loadTradingConfig()
-
-    expect(platforms.find(p => p.type === 'ccxt')).toBeDefined()
-    expect(platforms.find(p => p.type === 'alpaca')).toBeDefined()
-    expect(accounts.find(a => a.id === 'binance-main')).toBeDefined()
-    expect(accounts.find(a => a.id === 'alpaca-paper')).toBeDefined()
-
-    // Should have written platforms.json and accounts.json
-    const writtenPaths = mockWriteFile.mock.calls.map(c => c[0] as string)
-    expect(writtenPaths.some(p => p.endsWith('platforms.json'))).toBe(true)
-    expect(writtenPaths.some(p => p.endsWith('accounts.json'))).toBe(true)
-  })
-
-  it('migrates from legacy with none providers → empty arrays', async () => {
-    fileNotFound() // platforms.json
-    fileNotFound() // accounts.json
-    fileReturns({ provider: { type: 'none' }, guards: [] }) // crypto.json
-    fileReturns({ provider: { type: 'none' }, guards: [] }) // securities.json
-
-    const { platforms, accounts } = await loadTradingConfig()
-    expect(platforms).toHaveLength(0)
-    expect(accounts).toHaveLength(0)
-  })
-
-  it('falls back to defaults when legacy files are also missing', async () => {
-    fileNotFound() // platforms.json
-    fileNotFound() // accounts.json
-    fileNotFound() // crypto.json
-    fileNotFound() // securities.json
-
-    const { platforms, accounts } = await loadTradingConfig()
-    // Default crypto is ccxt/binance, default securities is alpaca/paper
-    expect(platforms.find(p => p.type === 'ccxt')).toBeDefined()
-    expect(platforms.find(p => p.type === 'alpaca')).toBeDefined()
   })
 })
 
 // ==================== aiProviderSchema (Zod schema validation) ====================
 
-describe('aiProviderSchema', () => {
-  it('accepts valid backends', () => {
-    for (const backend of ['claude-code', 'vercel-ai-sdk', 'agent-sdk'] as const) {
-      expect(() => aiProviderSchema.parse({ backend })).not.toThrow()
-    }
+describe('aiProviderSchema (profile-based)', () => {
+  it('uses defaults for empty object', () => {
+    const result = aiProviderSchema.parse({})
+    expect(result.activeProfile).toBe('default')
+    expect(result.profiles.default).toBeDefined()
+    expect(result.apiKeys).toEqual({})
+  })
+
+  it('accepts valid profile-based config', () => {
+    expect(() => aiProviderSchema.parse({
+      profiles: { test: { backend: 'codex', label: 'Test', model: 'gpt-5.4', loginMethod: 'codex-oauth' } },
+      activeProfile: 'test',
+    })).not.toThrow()
+  })
+})
+
+describe('profileSchema', () => {
+  it('validates agent-sdk profile', () => {
+    const result = profileSchema.parse({ backend: 'agent-sdk', label: 'Claude', model: 'claude-opus-4-6', loginMethod: 'claudeai' })
+    expect(result.backend).toBe('agent-sdk')
+  })
+
+  it('validates codex profile', () => {
+    const result = profileSchema.parse({ backend: 'codex', label: 'GPT', model: 'gpt-5.4' })
+    expect(result.backend).toBe('codex')
+    if (result.backend === 'codex') expect(result.loginMethod).toBe('codex-oauth') // default
+  })
+
+  it('validates vercel profile', () => {
+    const result = profileSchema.parse({ backend: 'vercel-ai-sdk', label: 'Gemini', provider: 'google', model: 'gemini-2.5-flash' })
+    expect(result.backend).toBe('vercel-ai-sdk')
   })
 
   it('rejects unknown backend', () => {
-    expect(() => aiProviderSchema.parse({ backend: 'unknown-backend' })).toThrow()
-  })
-
-  it('uses defaults for missing fields', () => {
-    const result = aiProviderSchema.parse({})
-    expect(result.backend).toBe('claude-code')
-    expect(result.provider).toBe('anthropic')
-    expect(result.model).toBe('claude-sonnet-4-6')
-    expect(result.apiKeys).toEqual({})
+    expect(() => profileSchema.parse({ backend: 'unknown', label: 'X', model: 'y' })).toThrow()
   })
 })

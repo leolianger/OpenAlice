@@ -13,6 +13,10 @@ import { devApi } from './dev'
 import { toolsApi } from './tools'
 import { channelsApi } from './channels'
 import { agentStatusApi } from './agentStatus'
+import { personaApi } from './persona'
+import { newsApi } from './news'
+import { diaryApi } from './diary'
+import { topologyApi } from './topology'
 export const api = {
   chat: chatApi,
   config: configApi,
@@ -25,12 +29,20 @@ export const api = {
   tools: toolsApi,
   channels: channelsApi,
   agentStatus: agentStatusApi,
+  persona: personaApi,
+  news: newsApi,
+  diary: diaryApi,
+  topology: topologyApi,
 }
 
 // Re-export all types for convenience
 export type {
   WebChannel,
-  VercelAiSdkOverride,
+  Profile,
+  AIBackend,
+  Preset,
+  JsonSchema,
+  JsonSchemaProperty,
   ChatMessage,
   ChatResponse,
   ToolCall,
@@ -51,7 +63,12 @@ export type {
   NewsCollectorConfig,
   NewsCollectorFeed,
   ToolCallRecord,
-  LoginMethod,
+  UTASnapshotSummary,
+  EquityCurvePoint,
+  NewsArticle,
+  NewsListResponse,
+  TopologyResponse,
+  TopologyListener,
 } from './types'
 export type { EventQueryResult } from './events'
 export type { ToolCallQueryResult } from './agentStatus'

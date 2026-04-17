@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import Decimal from 'decimal.js'
-import { Contract, Order } from '@traderalice/ibkr'
+import { Contract, Order, OrderState } from '@traderalice/ibkr'
 import { TradingGit } from './TradingGit.js'
 import type { TradingGitConfig } from './interfaces.js'
 import type { Operation, GitState } from './types.js'
@@ -10,7 +10,7 @@ import '../contract-ext.js'
 
 function makeContract(overrides: { aliceId?: string; symbol?: string } = {}): Contract {
   const c = new Contract()
-  c.aliceId = overrides.aliceId ?? 'mock-AAPL'
+  c.aliceId = overrides.aliceId ?? 'mock-paper|AAPL'
   c.symbol = overrides.symbol ?? 'AAPL'
   c.secType = 'STK'
   c.exchange = 'NASDAQ'
@@ -20,10 +20,10 @@ function makeContract(overrides: { aliceId?: string; symbol?: string } = {}): Co
 
 function makeGitState(overrides: Partial<GitState> = {}): GitState {
   return {
-    totalCashValue: 100_000,
-    netLiquidation: 105_000,
-    unrealizedPnL: 5_000,
-    realizedPnL: 1_000,
+    totalCashValue: '100000',
+    netLiquidation: '105000',
+    unrealizedPnL: '5000',
+    realizedPnL: '1000',
     positions: [],
     pendingOrders: [],
     ...overrides,
@@ -224,6 +224,105 @@ describe('TradingGit', () => {
       expect(result.submitted).toHaveLength(1)
       expect(result.rejected).toHaveLength(0)
     })
+
+    it('maps Filled orderState to filled status', async () => {
+      const orderState = new OrderState()
+      orderState.status = 'Filled'
+      const filledConfig = makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({
+          success: true,
+          orderId: 'order-filled',
+          orderState,
+        }),
+      })
+      const gitFilled = new TradingGit(filledConfig)
+
+      gitFilled.add(buyOp())
+      gitFilled.commit('market buy')
+      const result = await gitFilled.push()
+
+      expect(result.submitted).toHaveLength(1)
+      expect(result.submitted[0].status).toBe('filled')
+      expect(result.rejected).toHaveLength(0)
+    })
+
+    it('maps Cancelled orderState to cancelled status', async () => {
+      const orderState = new OrderState()
+      orderState.status = 'Cancelled'
+      const cancelConfig = makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({
+          success: true,
+          orderId: 'order-cancel',
+          orderState,
+        }),
+      })
+      const gitCancel = new TradingGit(cancelConfig)
+
+      gitCancel.add({ action: 'cancelOrder', orderId: 'order-cancel' })
+      gitCancel.commit('cancel order')
+      const result = await gitCancel.push()
+
+      expect(result.submitted).toHaveLength(1)
+      expect(result.submitted[0].status).toBe('cancelled')
+      expect(result.rejected).toHaveLength(0)
+    })
+
+    it('defaults to submitted when no orderState', async () => {
+      const noStateConfig = makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({
+          success: true,
+          orderId: 'order-async',
+        }),
+      })
+      const gitAsync = new TradingGit(noStateConfig)
+
+      gitAsync.add(buyOp())
+      gitAsync.commit('async limit')
+      const result = await gitAsync.push()
+
+      expect(result.submitted).toHaveLength(1)
+      expect(result.submitted[0].status).toBe('submitted')
+    })
+
+    it('maps Inactive orderState to rejected status', async () => {
+      const orderState = new OrderState()
+      orderState.status = 'Inactive'
+      const inactiveConfig = makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({
+          success: true,
+          orderId: 'order-inactive',
+          orderState,
+        }),
+      })
+      const gitInactive = new TradingGit(inactiveConfig)
+
+      gitInactive.add(buyOp())
+      gitInactive.commit('rejected by exchange')
+      const result = await gitInactive.push()
+
+      // Inactive maps to rejected — but success is still true from broker
+      // so it lands in submitted (success-based), with status 'rejected'
+      expect(result.submitted).toHaveLength(1)
+      expect(result.submitted[0].status).toBe('rejected')
+    })
+
+    it('records failed cancelOrder in rejected array', async () => {
+      const failConfig = makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({
+          success: false,
+          error: 'Order not found',
+        }),
+      })
+      const gitFail = new TradingGit(failConfig)
+
+      gitFail.add({ action: 'cancelOrder', orderId: 'nonexistent' })
+      gitFail.commit('cancel unknown')
+      const result = await gitFail.push()
+
+      expect(result.rejected).toHaveLength(1)
+      expect(result.rejected[0].error).toBe('Order not found')
+      expect(result.submitted).toHaveLength(0)
+    })
   })
 
   // ==================== log ====================
@@ -374,7 +473,7 @@ describe('TradingGit', () => {
           {
             orderId: 'order-1',
             symbol: 'AAPL',
-            previousStatus: 'pending',
+            previousStatus: 'submitted',
             currentStatus: 'filled',
             filledPrice: 155,
             filledQty: 10,
@@ -437,7 +536,7 @@ describe('TradingGit', () => {
         [{
           orderId: 'lmt-1',
           symbol: 'AAPL',
-          previousStatus: 'pending',
+          previousStatus: 'submitted',
           currentStatus: 'filled',
           filledPrice: 155,
           filledQty: 10,
@@ -445,6 +544,26 @@ describe('TradingGit', () => {
         makeGitState(),
       )
 
+      expect(gitP.getPendingOrderIds()).toHaveLength(0)
+    })
+
+    it('excludes orders that were filled at push time (no sync needed)', async () => {
+      const orderState = new OrderState()
+      orderState.status = 'Filled'
+      const filledConfig = makeConfig({
+        executeOperation: vi.fn().mockResolvedValue({
+          success: true,
+          orderId: 'mkt-1',
+          orderState,
+        }),
+      })
+      const gitP = new TradingGit(filledConfig)
+
+      gitP.add(buyOp('AAPL'))
+      gitP.commit('market buy')
+      await gitP.push()
+
+      // Filled at push time → should NOT appear as pending
       expect(gitP.getPendingOrderIds()).toHaveLength(0)
     })
   })
@@ -455,22 +574,23 @@ describe('TradingGit', () => {
     it('returns empty state when no positions', async () => {
       const result = await git.simulatePriceChange([{ symbol: 'AAPL', change: '-10%' }])
       expect(result.success).toBe(true)
-      expect(result.summary.totalPnLChange).toBe(0)
+      expect(result.summary.totalPnLChange).toBe('0')
     })
 
     it('simulates relative price change on long position', async () => {
       const stateWithPositions = makeGitState({
         positions: [
           {
-            contract: makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' }),
+            contract: makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' }),
+            currency: 'USD',
             side: 'long',
             quantity: new Decimal(10),
-            avgCost: 150,
-            marketPrice: 160,
-            marketValue: 1600,
-            unrealizedPnL: 100,
-            realizedPnL: 0,
-            leverage: 1,
+            avgCost: '150',
+            marketPrice: '160',
+            marketValue: '1600',
+            unrealizedPnL: '100',
+            realizedPnL: '0',
+
           },
         ],
       })
@@ -483,24 +603,25 @@ describe('TradingGit', () => {
       expect(result.success).toBe(true)
       // Price drops 10%: 160 -> 144
       const simPos = result.simulatedState.positions[0]
-      expect(simPos.simulatedPrice).toBe(144)
+      expect(simPos.simulatedPrice).toBe('144')
       // PnL: (144 - 150) * 10 = -60
-      expect(simPos.unrealizedPnL).toBe(-60)
+      expect(simPos.unrealizedPnL).toBe('-60')
     })
 
     it('simulates absolute price change', async () => {
       const stateWithPositions = makeGitState({
         positions: [
           {
-            contract: makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' }),
+            contract: makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' }),
+            currency: 'USD',
             side: 'long',
             quantity: new Decimal(10),
-            avgCost: 150,
-            marketPrice: 160,
-            marketValue: 1600,
-            unrealizedPnL: 100,
-            realizedPnL: 0,
-            leverage: 1,
+            avgCost: '150',
+            marketPrice: '160',
+            marketValue: '1600',
+            unrealizedPnL: '100',
+            realizedPnL: '0',
+
           },
         ],
       })
@@ -511,9 +632,9 @@ describe('TradingGit', () => {
 
       const result = await simGit.simulatePriceChange([{ symbol: 'AAPL', change: '@200' }])
       expect(result.success).toBe(true)
-      expect(result.simulatedState.positions[0].simulatedPrice).toBe(200)
+      expect(result.simulatedState.positions[0].simulatedPrice).toBe('200')
       // PnL: (200 - 150) * 10 = 500
-      expect(result.simulatedState.positions[0].unrealizedPnL).toBe(500)
+      expect(result.simulatedState.positions[0].unrealizedPnL).toBe('500')
     })
 
     it('simulates "all" positions', async () => {
@@ -521,13 +642,13 @@ describe('TradingGit', () => {
         positions: [
           {
             contract: makeContract({ symbol: 'AAPL' }),
-            side: 'long', quantity: new Decimal(10), avgCost: 100, marketPrice: 100,
-            marketValue: 1000, unrealizedPnL: 0, realizedPnL: 0, leverage: 1,
+            currency: 'USD', side: 'long', quantity: new Decimal(10), avgCost: '100', marketPrice: '100',
+            marketValue: '1000', unrealizedPnL: '0', realizedPnL: '0',
           },
           {
             contract: makeContract({ symbol: 'GOOG' }),
-            side: 'long', quantity: new Decimal(5), avgCost: 200, marketPrice: 200,
-            marketValue: 1000, unrealizedPnL: 0, realizedPnL: 0, leverage: 1,
+            currency: 'USD', side: 'long', quantity: new Decimal(5), avgCost: '200', marketPrice: '200',
+            marketValue: '1000', unrealizedPnL: '0', realizedPnL: '0',
           },
         ],
       })
@@ -537,8 +658,8 @@ describe('TradingGit', () => {
       const result = await simGit.simulatePriceChange([{ symbol: 'all', change: '+10%' }])
       expect(result.success).toBe(true)
       expect(result.simulatedState.positions).toHaveLength(2)
-      expect(result.simulatedState.positions[0].simulatedPrice).toBeCloseTo(110)
-      expect(result.simulatedState.positions[1].simulatedPrice).toBeCloseTo(220)
+      expect(Number(result.simulatedState.positions[0].simulatedPrice)).toBeCloseTo(110)
+      expect(Number(result.simulatedState.positions[1].simulatedPrice)).toBeCloseTo(220)
     })
 
     it('returns error for invalid price change format', async () => {
@@ -546,8 +667,8 @@ describe('TradingGit', () => {
         positions: [
           {
             contract: makeContract({ symbol: 'AAPL' }),
-            side: 'long', quantity: new Decimal(10), avgCost: 100, marketPrice: 100,
-            marketValue: 1000, unrealizedPnL: 0, realizedPnL: 0, leverage: 1,
+            currency: 'USD', side: 'long', quantity: new Decimal(10), avgCost: '100', marketPrice: '100',
+            marketValue: '1000', unrealizedPnL: '0', realizedPnL: '0',
           },
         ],
       })

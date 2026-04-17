@@ -6,16 +6,31 @@
  */
 
 import { SDKBaseClient } from './base-client.js'
+import type {
+  EquityHistoricalData, EquityQuoteData, EquityPerformanceData,
+  EquitySearchData, EquityScreenerData, EquityInfoData, MarketSnapshotsData, HistoricalMarketCapData,
+  BalanceSheetData, BalanceSheetGrowthData, IncomeStatementData, IncomeStatementGrowthData,
+  CashFlowStatementData, CashFlowStatementGrowthData, FinancialRatiosData, KeyMetricsData,
+  HistoricalDividendsData, HistoricalEpsData, HistoricalEmployeesData, ExecutiveCompensationData,
+  CompanyFilingsData, HistoricalSplitsData, EarningsCallTranscriptData,
+  RevenueGeographicData, RevenueBusinessLineData, EsgScoreData,
+  CalendarIpoData, CalendarDividendData, CalendarSplitsData, CalendarEarningsData, EconomicCalendarData,
+  PriceTargetData, AnalystEstimatesData, PriceTargetConsensusData,
+  ForwardEbitdaEstimatesData, ForwardEpsEstimatesData,
+  EquityDiscoveryData, DiscoveryFilingsData, RecentPerformanceData,
+  InstitutionalOwnershipData, InsiderTradingData, ShareStatisticsData, GovernmentTradesData,
+  EquityPeersData,
+} from '@traderalice/opentypebb'
 
 export class SDKEquityClient extends SDKBaseClient {
   // ==================== Price ====================
 
   async getHistorical(params: Record<string, unknown>) {
-    return this.request('/price/historical', params)
+    return this.request<EquityHistoricalData>('/price/historical', params)
   }
 
   async getQuote(params: Record<string, unknown>) {
-    return this.request('/price/quote', params)
+    return this.request<EquityQuoteData>('/price/quote', params)
   }
 
   async getNBBO(params: Record<string, unknown>) {
@@ -23,55 +38,55 @@ export class SDKEquityClient extends SDKBaseClient {
   }
 
   async getPricePerformance(params: Record<string, unknown>) {
-    return this.request('/price/performance', params)
+    return this.request<EquityPerformanceData>('/price/performance', params)
   }
 
   // ==================== Info ====================
 
   async search(params: Record<string, unknown>) {
-    return this.request('/search', params)
+    return this.request<EquitySearchData>('/search', params)
   }
 
   async screener(params: Record<string, unknown>) {
-    return this.request('/screener', params)
+    return this.request<EquityScreenerData>('/screener', params)
   }
 
   async getProfile(params: Record<string, unknown>) {
-    return this.request('/profile', params)
+    return this.request<EquityInfoData>('/profile', params)
   }
 
   async getMarketSnapshots(params: Record<string, unknown> = {}) {
-    return this.request('/market_snapshots', params)
+    return this.request<MarketSnapshotsData>('/market_snapshots', params)
   }
 
   async getHistoricalMarketCap(params: Record<string, unknown>) {
-    return this.request('/historical_market_cap', params)
+    return this.request<HistoricalMarketCapData>('/historical_market_cap', params)
   }
 
   // ==================== Fundamental ====================
 
   async getBalanceSheet(params: Record<string, unknown>) {
-    return this.request('/fundamental/balance', params)
+    return this.request<BalanceSheetData>('/fundamental/balance', params)
   }
 
   async getBalanceSheetGrowth(params: Record<string, unknown>) {
-    return this.request('/fundamental/balance_growth', params)
+    return this.request<BalanceSheetGrowthData>('/fundamental/balance_growth', params)
   }
 
   async getIncomeStatement(params: Record<string, unknown>) {
-    return this.request('/fundamental/income', params)
+    return this.request<IncomeStatementData>('/fundamental/income', params)
   }
 
   async getIncomeStatementGrowth(params: Record<string, unknown>) {
-    return this.request('/fundamental/income_growth', params)
+    return this.request<IncomeStatementGrowthData>('/fundamental/income_growth', params)
   }
 
   async getCashFlow(params: Record<string, unknown>) {
-    return this.request('/fundamental/cash', params)
+    return this.request<CashFlowStatementData>('/fundamental/cash', params)
   }
 
   async getCashFlowGrowth(params: Record<string, unknown>) {
-    return this.request('/fundamental/cash_growth', params)
+    return this.request<CashFlowStatementGrowthData>('/fundamental/cash_growth', params)
   }
 
   async getReportedFinancials(params: Record<string, unknown>) {
@@ -79,23 +94,23 @@ export class SDKEquityClient extends SDKBaseClient {
   }
 
   async getFinancialRatios(params: Record<string, unknown>) {
-    return this.request('/fundamental/ratios', params)
+    return this.request<FinancialRatiosData>('/fundamental/ratios', params)
   }
 
   async getKeyMetrics(params: Record<string, unknown>) {
-    return this.request('/fundamental/metrics', params)
+    return this.request<KeyMetricsData>('/fundamental/metrics', params)
   }
 
   async getDividends(params: Record<string, unknown>) {
-    return this.request('/fundamental/dividends', params)
+    return this.request<HistoricalDividendsData>('/fundamental/dividends', params)
   }
 
   async getEarningsHistory(params: Record<string, unknown>) {
-    return this.request('/fundamental/historical_eps', params)
+    return this.request<HistoricalEpsData>('/fundamental/historical_eps', params)
   }
 
   async getEmployeeCount(params: Record<string, unknown>) {
-    return this.request('/fundamental/employee_count', params)
+    return this.request<HistoricalEmployeesData>('/fundamental/employee_count', params)
   }
 
   async getManagement(params: Record<string, unknown>) {
@@ -103,19 +118,19 @@ export class SDKEquityClient extends SDKBaseClient {
   }
 
   async getManagementCompensation(params: Record<string, unknown>) {
-    return this.request('/fundamental/management_compensation', params)
+    return this.request<ExecutiveCompensationData>('/fundamental/management_compensation', params)
   }
 
   async getFilings(params: Record<string, unknown>) {
-    return this.request('/fundamental/filings', params)
+    return this.request<CompanyFilingsData>('/fundamental/filings', params)
   }
 
   async getSplits(params: Record<string, unknown>) {
-    return this.request('/fundamental/historical_splits', params)
+    return this.request<HistoricalSplitsData>('/fundamental/historical_splits', params)
   }
 
   async getTranscript(params: Record<string, unknown>) {
-    return this.request('/fundamental/transcript', params)
+    return this.request<EarningsCallTranscriptData>('/fundamental/transcript', params)
   }
 
   async getTrailingDividendYield(params: Record<string, unknown>) {
@@ -123,15 +138,15 @@ export class SDKEquityClient extends SDKBaseClient {
   }
 
   async getRevenuePerGeography(params: Record<string, unknown>) {
-    return this.request('/fundamental/revenue_per_geography', params)
+    return this.request<RevenueGeographicData>('/fundamental/revenue_per_geography', params)
   }
 
   async getRevenuePerSegment(params: Record<string, unknown>) {
-    return this.request('/fundamental/revenue_per_segment', params)
+    return this.request<RevenueBusinessLineData>('/fundamental/revenue_per_segment', params)
   }
 
   async getEsgScore(params: Record<string, unknown>) {
-    return this.request('/fundamental/esg_score', params)
+    return this.request<EsgScoreData>('/fundamental/esg_score', params)
   }
 
   async getSearchAttributes(params: Record<string, unknown>) {
@@ -149,37 +164,37 @@ export class SDKEquityClient extends SDKBaseClient {
   // ==================== Calendar ====================
 
   async getCalendarIpo(params: Record<string, unknown> = {}) {
-    return this.request('/calendar/ipo', params)
+    return this.request<CalendarIpoData>('/calendar/ipo', params)
   }
 
   async getCalendarDividend(params: Record<string, unknown> = {}) {
-    return this.request('/calendar/dividend', params)
+    return this.request<CalendarDividendData>('/calendar/dividend', params)
   }
 
   async getCalendarSplits(params: Record<string, unknown> = {}) {
-    return this.request('/calendar/splits', params)
+    return this.request<CalendarSplitsData>('/calendar/splits', params)
   }
 
   async getCalendarEarnings(params: Record<string, unknown> = {}) {
-    return this.request('/calendar/earnings', params)
+    return this.request<CalendarEarningsData>('/calendar/earnings', params)
   }
 
   async getCalendarEvents(params: Record<string, unknown> = {}) {
-    return this.request('/calendar/events', params)
+    return this.request<EconomicCalendarData>('/calendar/events', params)
   }
 
   // ==================== Estimates ====================
 
   async getPriceTarget(params: Record<string, unknown>) {
-    return this.request('/estimates/price_target', params)
+    return this.request<PriceTargetData>('/estimates/price_target', params)
   }
 
   async getAnalystEstimates(params: Record<string, unknown>) {
-    return this.request('/estimates/historical', params)
+    return this.request<AnalystEstimatesData>('/estimates/historical', params)
   }
 
   async getEstimateConsensus(params: Record<string, unknown>) {
-    return this.request('/estimates/consensus', params)
+    return this.request<PriceTargetConsensusData>('/estimates/consensus', params)
   }
 
   async getAnalystSearch(params: Record<string, unknown>) {
@@ -191,11 +206,11 @@ export class SDKEquityClient extends SDKBaseClient {
   }
 
   async getForwardEbitda(params: Record<string, unknown>) {
-    return this.request('/estimates/forward_ebitda', params)
+    return this.request<ForwardEbitdaEstimatesData>('/estimates/forward_ebitda', params)
   }
 
   async getForwardEps(params: Record<string, unknown>) {
-    return this.request('/estimates/forward_eps', params)
+    return this.request<ForwardEpsEstimatesData>('/estimates/forward_eps', params)
   }
 
   async getForwardPe(params: Record<string, unknown>) {
@@ -205,43 +220,43 @@ export class SDKEquityClient extends SDKBaseClient {
   // ==================== Discovery ====================
 
   async getGainers(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/gainers', params)
+    return this.request<EquityDiscoveryData>('/discovery/gainers', params)
   }
 
   async getLosers(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/losers', params)
+    return this.request<EquityDiscoveryData>('/discovery/losers', params)
   }
 
   async getActive(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/active', params)
+    return this.request<EquityDiscoveryData>('/discovery/active', params)
   }
 
   async getUndervaluedLargeCaps(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/undervalued_large_caps', params)
+    return this.request<EquityDiscoveryData>('/discovery/undervalued_large_caps', params)
   }
 
   async getUndervaluedGrowth(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/undervalued_growth', params)
+    return this.request<EquityDiscoveryData>('/discovery/undervalued_growth', params)
   }
 
   async getAggressiveSmallCaps(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/aggressive_small_caps', params)
+    return this.request<EquityDiscoveryData>('/discovery/aggressive_small_caps', params)
   }
 
   async getGrowthTech(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/growth_tech', params)
+    return this.request<EquityDiscoveryData>('/discovery/growth_tech', params)
   }
 
   async getTopRetail(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/top_retail', params)
+    return this.request<EquityDiscoveryData>('/discovery/top_retail', params)
   }
 
   async getDiscoveryFilings(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/filings', params)
+    return this.request<DiscoveryFilingsData>('/discovery/filings', params)
   }
 
   async getLatestFinancialReports(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/latest_financial_reports', params)
+    return this.request<RecentPerformanceData>('/discovery/latest_financial_reports', params)
   }
 
   // ==================== Ownership ====================
@@ -251,15 +266,15 @@ export class SDKEquityClient extends SDKBaseClient {
   }
 
   async getInstitutional(params: Record<string, unknown>) {
-    return this.request('/ownership/institutional', params)
+    return this.request<InstitutionalOwnershipData>('/ownership/institutional', params)
   }
 
   async getInsiderTrading(params: Record<string, unknown>) {
-    return this.request('/ownership/insider_trading', params)
+    return this.request<InsiderTradingData>('/ownership/insider_trading', params)
   }
 
   async getShareStatistics(params: Record<string, unknown>) {
-    return this.request('/ownership/share_statistics', params)
+    return this.request<ShareStatisticsData>('/ownership/share_statistics', params)
   }
 
   async getForm13F(params: Record<string, unknown>) {
@@ -267,7 +282,7 @@ export class SDKEquityClient extends SDKBaseClient {
   }
 
   async getGovernmentTrades(params: Record<string, unknown> = {}) {
-    return this.request('/ownership/government_trades', params)
+    return this.request<GovernmentTradesData>('/ownership/government_trades', params)
   }
 
   // ==================== Shorts ====================
@@ -287,7 +302,7 @@ export class SDKEquityClient extends SDKBaseClient {
   // ==================== Compare ====================
 
   async getPeers(params: Record<string, unknown>) {
-    return this.request('/compare/peers', params)
+    return this.request<EquityPeersData>('/compare/peers', params)
   }
 
   async getCompareGroups(params: Record<string, unknown> = {}) {

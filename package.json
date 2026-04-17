@@ -1,18 +1,17 @@
 {
   "name": "open-alice",
-  "version": "0.9.0-beta.6",
+  "version": "0.9.0-beta.12",
   "description": "File-based trading agent engine",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/main.ts",
+    "dev": "tsx watch src/main.ts",
     "dev:ui": "pnpm --filter open-alice-ui dev",
-    "predev": "pnpm --filter opentypebb build && pnpm --filter @traderalice/ibkr build",
-    "build": "pnpm --filter opentypebb build && pnpm --filter @traderalice/ibkr build && pnpm build:ui && pnpm build:backend",
-    "build:ui": "pnpm --filter open-alice-ui build",
-    "build:backend": "tsup src/main.ts --format esm --dts",
+    "predev": "turbo run build --filter=@traderalice/opentypebb --filter=@traderalice/ibkr",
+    "build": "turbo run build && tsup src/main.ts --format esm --dts",
     "start": "node dist/main.js",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:bbProvider": "vitest run --config vitest.bbProvider.config.ts",
     "test:watch": "vitest"
   },
   "keywords": [
@@ -22,7 +21,7 @@
     "securities",
     "file-driven"
   ],
-  "author": "Open Alice Contributors",
+  "author": "OpenAlice Contributors",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
@@ -52,6 +51,7 @@
     "grammy": "^1.40.0",
     "hono": "^4.12.7",
     "json5": "^2.2.3",
+    "openai": "^6.33.0",
     "pino": "^10.3.1",
     "playwright-core": "1.58.2",
     "sharp": "^0.34.5",
@@ -79,6 +79,7 @@
     "jsdom": "^29.0.0",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
+    "turbo": "^2.9.3",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   }

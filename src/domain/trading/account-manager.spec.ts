@@ -8,8 +8,8 @@ import {
 } from './brokers/mock/index.js'
 import './contract-ext.js'
 
-function makeUta(broker: MockBroker, platformId?: string): UnifiedTradingAccount {
-  return new UnifiedTradingAccount(broker, { platformId })
+function makeUta(broker: MockBroker): UnifiedTradingAccount {
+  return new UnifiedTradingAccount(broker)
 }
 
 describe('AccountManager', () => {
@@ -63,14 +63,6 @@ describe('AccountManager', () => {
       expect(list[1].id).toBe('a2')
     })
 
-    it('includes platformId when provided', () => {
-      manager.add(makeUta(new MockBroker({ id: 'a1' }), 'alpaca-paper'))
-      manager.add(makeUta(new MockBroker({ id: 'a2' })))
-
-      const list = manager.listAccounts()
-      expect(list[0].platformId).toBe('alpaca-paper')
-      expect(list[1].platformId).toBeUndefined()
-    })
   })
 
   // ==================== resolve ====================
@@ -111,20 +103,20 @@ describe('AccountManager', () => {
 
   describe('getAggregatedEquity', () => {
     it('aggregates equity across accounts', async () => {
-      manager.add(makeUta(new MockBroker({ id: 'a1', label: 'A', accountInfo: { netLiquidation: 50_000, totalCashValue: 30_000, unrealizedPnL: 2_000, realizedPnL: 500 } })))
-      manager.add(makeUta(new MockBroker({ id: 'a2', label: 'B', accountInfo: { netLiquidation: 75_000, totalCashValue: 60_000, unrealizedPnL: 3_000, realizedPnL: 1_000 } })))
+      manager.add(makeUta(new MockBroker({ id: 'a1', label: 'A', accountInfo: { netLiquidation: '50000', totalCashValue: '30000', unrealizedPnL: '2000', realizedPnL: '500' } })))
+      manager.add(makeUta(new MockBroker({ id: 'a2', label: 'B', accountInfo: { netLiquidation: '75000', totalCashValue: '60000', unrealizedPnL: '3000', realizedPnL: '1000' } })))
 
       const result = await manager.getAggregatedEquity()
-      expect(result.totalEquity).toBe(125_000)
-      expect(result.totalCash).toBe(90_000)
-      expect(result.totalUnrealizedPnL).toBe(5_000)
-      expect(result.totalRealizedPnL).toBe(1_500)
+      expect(result.totalEquity).toBe('125000')
+      expect(result.totalCash).toBe('90000')
+      expect(result.totalUnrealizedPnL).toBe('5000')
+      expect(result.totalRealizedPnL).toBe('1500')
       expect(result.accounts).toHaveLength(2)
     })
 
     it('returns zeros when no accounts', async () => {
       const result = await manager.getAggregatedEquity()
-      expect(result.totalEquity).toBe(0)
+      expect(result.totalEquity).toBe('0')
       expect(result.accounts).toHaveLength(0)
     })
   })
@@ -135,12 +127,12 @@ describe('AccountManager', () => {
     it('searches all accounts by default', async () => {
       const a1 = new MockBroker({ id: 'a1' })
       const desc1 = new ContractDescription()
-      desc1.contract = makeContract({ aliceId: 'a1-AAPL' })
+      desc1.contract = makeContract({ aliceId: 'a1|AAPL' })
       vi.spyOn(a1, 'searchContracts').mockResolvedValue([desc1])
 
       const a2 = new MockBroker({ id: 'a2' })
       const desc2 = new ContractDescription()
-      desc2.contract = makeContract({ aliceId: 'a2-AAPL' })
+      desc2.contract = makeContract({ aliceId: 'a2|AAPL' })
       vi.spyOn(a2, 'searchContracts').mockResolvedValue([desc2])
 
       manager.add(makeUta(a1))
@@ -153,12 +145,12 @@ describe('AccountManager', () => {
     it('scopes search to specific accountId', async () => {
       const a1 = new MockBroker({ id: 'a1' })
       const desc1 = new ContractDescription()
-      desc1.contract = makeContract({ aliceId: 'a1-AAPL' })
+      desc1.contract = makeContract({ aliceId: 'a1|AAPL' })
       vi.spyOn(a1, 'searchContracts').mockResolvedValue([desc1])
 
       const a2 = new MockBroker({ id: 'a2' })
       const desc2 = new ContractDescription()
-      desc2.contract = makeContract({ aliceId: 'a2-AAPL' })
+      desc2.contract = makeContract({ aliceId: 'a2|AAPL' })
       vi.spyOn(a2, 'searchContracts').mockResolvedValue([desc2])
 
       manager.add(makeUta(a1))

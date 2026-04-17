@@ -1,16 +1,40 @@
+import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useConfigPage } from '../hooks/useConfigPage'
 import { SaveIndicator } from '../components/SaveIndicator'
 import { SDKSelector, CONNECTOR_OPTIONS } from '../components/SDKSelector'
-import { Section, Field, inputClass } from '../components/form'
+import { ConfigSection, Field, inputClass } from '../components/form'
 import { PageHeader } from '../components/PageHeader'
 import type { AppConfig, ConnectorsConfig } from '../api'
 
 export function ConnectorsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [pendingChatId, setPendingChatId] = useState<number | null>(null)
+
   const { config, status, loadError, updateConfig, updateConfigImmediate, retry } =
     useConfigPage<ConnectorsConfig>({
       section: 'connectors',
       extract: (full: AppConfig) => full.connectors,
     })
+
+  // Pick up ?addChatId= from URL
+  useEffect(() => {
+    const raw = searchParams.get('addChatId')
+    if (!raw) return
+    const id = Number(raw)
+    if (!isNaN(id) && id !== 0) setPendingChatId(id)
+    setSearchParams({}, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  const handleAuthorize = () => {
+    if (!config || !pendingChatId) return
+    if (!config.telegram.chatIds.includes(pendingChatId)) {
+      updateConfigImmediate({
+        telegram: { ...config.telegram, chatIds: [...config.telegram.chatIds, pendingChatId] },
+      })
+    }
+    setPendingChatId(null)
+  }
 
   // Derive selected connector IDs from enabled flags (web + mcp are always included)
   const selected = config
@@ -40,11 +64,33 @@ export function ConnectorsPage() {
       />
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
+      <div className="flex-1 overflow-y-auto px-4 md:px-8 py-5">
         {config && (
-          <div className="max-w-[640px] space-y-5">
+          <div className="max-w-[880px] mx-auto">
+            {/* Telegram chat authorization banner */}
+            {pendingChatId !== null && (
+              <div className="mb-6 flex items-center justify-between gap-4 rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-[13px]">
+                <span>
+                  Authorize Telegram chat <code className="font-mono font-semibold">{pendingChatId}</code>?
+                </span>
+                <span className="flex gap-2 shrink-0">
+                  <button
+                    className="rounded-md bg-blue-600 px-3 py-1 text-white hover:bg-blue-500"
+                    onClick={handleAuthorize}
+                  >
+                    Authorize
+                  </button>
+                  <button
+                    className="rounded-md border border-border px-3 py-1 hover:bg-bg-2"
+                    onClick={() => setPendingChatId(null)}
+                  >
+                    Dismiss
+                  </button>
+                </span>
+              </div>
+            )}
             {/* Connector selector cards */}
-            <Section
+            <ConfigSection
               title="Active Connectors"
               description="Select which connectors to enable. Web UI and MCP Server are always active."
             >
@@ -53,10 +99,10 @@ export function ConnectorsPage() {
                 selected={selected}
                 onToggle={handleToggle}
               />
-            </Section>
+            </ConfigSection>
 
             {/* Web UI config — always shown */}
-            <Section
+            <ConfigSection
               title="Web UI"
               description="Browser-based chat and configuration interface."
             >
@@ -68,10 +114,10 @@ export function ConnectorsPage() {
                   onChange={(e) => updateConfig({ web: { port: Number(e.target.value) } })}
                 />
               </Field>
-            </Section>
+            </ConfigSection>
 
             {/* MCP Server config — always shown */}
-            <Section
+            <ConfigSection
               title="MCP Server"
               description="Tool bridge for Claude Code provider and external AI agents."
             >
@@ -83,11 +129,11 @@ export function ConnectorsPage() {
                   onChange={(e) => updateConfig({ mcp: { port: Number(e.target.value) } })}
                 />
               </Field>
-            </Section>
+            </ConfigSection>
 
             {/* MCP Ask config */}
             {config.mcpAsk.enabled && (
-              <Section
+              <ConfigSection
                 title="MCP Ask"
                 description="Multi-turn conversation endpoint for external agents."
               >
@@ -103,12 +149,12 @@ export function ConnectorsPage() {
                     placeholder="e.g. 3003"
                   />
                 </Field>
-              </Section>
+              </ConfigSection>
             )}
 
             {/* Telegram config */}
             {config.telegram.enabled && (
-              <Section
+              <ConfigSection
                 title="Telegram"
                 description="Create a bot via @BotFather, paste the token below, and add your chat ID."
               >
@@ -157,7 +203,7 @@ export function ConnectorsPage() {
                     placeholder="Comma-separated, e.g. 123456, 789012"
                   />
                 </Field>
-              </Section>
+              </ConfigSection>
             )}
           </div>
         )}

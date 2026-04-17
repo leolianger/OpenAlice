@@ -1,4 +1,4 @@
-# Open Alice
+# OpenAlice
 
 File-driven AI trading agent. All state (sessions, config, logs) stored as files — no database.
 
@@ -9,7 +9,19 @@ pnpm install
 pnpm dev        # Dev mode (tsx watch, port 3002)
 pnpm build      # Production build (backend + UI)
 pnpm test       # Vitest
+pnpm test:e2e   # e2e test
 ```
+
+### Pre-commit Verification
+
+Always run these checks before committing:
+
+```bash
+npx tsc --noEmit   # Type check (catches errors pnpm build misses)
+pnpm test           # Unit tests
+```
+
+`pnpm build` uses tsup which is lenient — `tsc --noEmit` catches strict type errors that tsup ignores.
 
 ## Project Structure
 
@@ -22,7 +34,7 @@ src/
 │   ├── tool-center.ts         # Centralized tool registry (Vercel + MCP export)
 │   ├── session.ts             # JSONL session store
 │   ├── compaction.ts          # Auto-summarize long context windows
-│   ├── config.ts              # Zod-validated config loader
+│   ├── config.ts              # Zod-validated config loader (generic account schema with brokerConfig)
 │   ├── ai-config.ts           # Runtime AI provider selection
 │   ├── event-log.ts           # Append-only JSONL event log
 │   ├── connector-center.ts    # ConnectorCenter — push delivery + last-interacted tracking
@@ -37,6 +49,14 @@ src/
 ├── domain/
 │   ├── market-data/           # Structured data layer (typebb in-process + OpenBB API remote)
 │   ├── trading/               # Unified multi-account trading, guard pipeline, git-like commits
+│   │   ├── account-manager.ts # UTA lifecycle (init, reconnect, enable/disable) + registry
+│   │   ├── git-persistence.ts # Git state load/save
+│   │   └── brokers/
+│   │       ├── registry.ts    # Broker self-registration (configSchema + configFields + fromConfig)
+│   │       ├── alpaca/        # Alpaca (US equities)
+│   │       ├── ccxt/          # CCXT (100+ crypto exchanges)
+│   │       ├── ibkr/          # Interactive Brokers (TWS/Gateway)
+│   │       └── mock/          # In-memory test broker
 │   ├── analysis/              # Indicators, technical analysis, sandbox
 │   ├── news/                  # RSS collector + archive search
 │   ├── brain/                 # Cognitive state (memory, emotion)
@@ -111,3 +131,5 @@ Centralized registry. `tool/` files register tools via `ToolCenter.register()`, 
 - When merging PRs, **prefer `--merge` over `--squash`** — squash destroys individual commit history. If the PR has clean, meaningful commits, merge them as-is
 - If squash is needed (messy history), do it — but never combine with `--delete-branch`
 - `archive/dev-pre-beta6` is a historical snapshot — do not modify or delete
+- **After merging a PR**, always `git pull origin master` to sync local master. Stale local master causes confusion about what's merged and what's not.
+- **Before creating a PR**, always `git fetch origin master` to check what's already merged. Use `git log --oneline origin/master..HEAD` to verify only the intended commits are ahead. Stale local refs cause PRs with wrong diff.

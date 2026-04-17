@@ -8,6 +8,7 @@
  * fillPendingOrder() to trigger fills in tests).
  */
 
+import { z } from 'zod'
 import Decimal from 'decimal.js'
 import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DECIMAL, UNSET_DOUBLE } from '@traderalice/ibkr'
 import type {
@@ -19,6 +20,7 @@ import type {
   OpenOrder,
   Quote,
   MarketClock,
+  TpSlParams,
 } from '../types.js'
 import '../../contract-ext.js'
 
@@ -57,11 +59,12 @@ export interface MockBrokerOptions {
 // ==================== Defaults ====================
 
 export const DEFAULT_ACCOUNT_INFO: AccountInfo = {
-  netLiquidation: 105_000,
-  totalCashValue: 100_000,
-  unrealizedPnL: 5_000,
-  realizedPnL: 1_000,
-  buyingPower: 200_000,
+  baseCurrency: 'USD',
+  netLiquidation: '105000',
+  totalCashValue: '100000',
+  unrealizedPnL: '5000',
+  realizedPnL: '1000',
+  buyingPower: '200000',
 }
 
 export const DEFAULT_CAPABILITIES: AccountCapabilities = {
@@ -73,7 +76,7 @@ export const DEFAULT_CAPABILITIES: AccountCapabilities = {
 
 export function makeContract(overrides: Partial<Contract> & { aliceId?: string } = {}): Contract {
   const c = new Contract()
-  c.aliceId = overrides.aliceId ?? 'mock-AAPL'
+  c.aliceId = overrides.aliceId ?? 'mock-paper|AAPL'
   c.symbol = overrides.symbol ?? 'AAPL'
   c.secType = overrides.secType ?? 'STK'
   c.exchange = overrides.exchange ?? 'MOCK'
@@ -85,14 +88,14 @@ export function makePosition(overrides: Partial<Position> = {}): Position {
   const contract = overrides.contract ?? makeContract()
   return {
     contract,
+    currency: contract.currency || 'USD',
     side: 'long',
     quantity: new Decimal(10),
-    avgCost: 150,
-    marketPrice: 160,
-    marketValue: 1600,
-    unrealizedPnL: 100,
-    realizedPnL: 0,
-    leverage: 1,
+    avgCost: '150',
+    marketPrice: '160',
+    marketValue: '1600',
+    unrealizedPnL: '100',
+    realizedPnL: '0',
     ...overrides,
   }
 }
@@ -123,6 +126,17 @@ export function makePlaceOrderResult(overrides: Partial<PlaceOrderResult> = {}):
 // ==================== MockBroker ====================
 
 export class MockBroker implements IBroker {
+  // ---- Self-registration ----
+
+  static configSchema = z.object({})
+  static configFields: import('../types.js').BrokerConfigField[] = []
+
+  static fromConfig(config: { id: string; label?: string; brokerConfig: Record<string, unknown> }): MockBroker {
+    return new MockBroker({ id: config.id, label: config.label })
+  }
+
+  // ---- Instance ----
+
   readonly id: string
   readonly label: string
 
@@ -134,6 +148,7 @@ export class MockBroker implements IBroker {
   private _nextOrderId = 1
   private _accountOverride: AccountInfo | null = null
   private _callLog: CallRecord[] = []
+  private _failRemaining = 0
 
   constructor(options: MockBrokerOptions = {}) {
     this.id = options.id ?? 'mock-paper'
@@ -141,7 +156,7 @@ export class MockBroker implements IBroker {
     this._cash = new Decimal(options.cash ?? 100_000)
     if (options.accountInfo) {
       this._accountOverride = {
-        netLiquidation: 0, totalCashValue: 0, unrealizedPnL: 0, realizedPnL: 0,
+        baseCurrency: 'USD', netLiquidation: '0', totalCashValue: '0', unrealizedPnL: '0', realizedPnL: '0',
         ...options.accountInfo,
       }
     }
@@ -151,6 +166,13 @@ export class MockBroker implements IBroker {
 
   private _record(method: string, args: unknown[]): void {
     this._callLog.push({ method, args, timestamp: Date.now() })
+  }
+
+  private _checkFail(method: string): void {
+    if (this._failRemaining > 0) {
+      this._failRemaining--
+      throw new Error(`MockBroker[${this.id}]: simulated ${method} failure`)
+    }
   }
 
   /** Get all calls, optionally filtered by method name. */
@@ -176,7 +198,7 @@ export class MockBroker implements IBroker {
 
   // ---- Lifecycle ----
 
-  async init(): Promise<void> { this._record('init', []) }
+  async init(): Promise<void> { this._record('init', []); this._checkFail('init') }
   async close(): Promise<void> { this._record('close', []) }
 
   // ---- Contract search (stub) ----
@@ -198,8 +220,8 @@ export class MockBroker implements IBroker {
 
   // ---- Trading operations ----
 
-  async placeOrder(contract: Contract, order: Order, _extraParams?: Record<string, unknown>): Promise<PlaceOrderResult> {
-    this._record('placeOrder', [contract, order, _extraParams])
+  async placeOrder(contract: Contract, order: Order, tpsl?: TpSlParams): Promise<PlaceOrderResult> {
+    this._record('placeOrder', [contract, order, tpsl])
     const orderId = `mock-ord-${this._nextOrderId++}`
     const isMarket = order.orderType === 'MKT'
     const side = order.action.toUpperCase()
@@ -243,34 +265,46 @@ export class MockBroker implements IBroker {
     return { success: true, orderId, orderState }
   }
 
-  async modifyOrder(orderId: string, changes: Order): Promise<PlaceOrderResult> {
+  async modifyOrder(orderId: string, changes: Partial<Order>): Promise<PlaceOrderResult> {
     this._record('modifyOrder', [orderId, changes])
     const internal = this._orders.get(orderId)
     if (!internal || internal.status !== 'Submitted') {
       return { success: false, error: `Order ${orderId} not found or not pending` }
     }
 
-    if (!changes.totalQuantity.equals(UNSET_DECIMAL)) {
+    if (changes.totalQuantity != null && !changes.totalQuantity.equals(UNSET_DECIMAL)) {
       internal.order.totalQuantity = changes.totalQuantity
     }
-    if (changes.lmtPrice !== UNSET_DOUBLE) {
+    if (changes.lmtPrice != null && changes.lmtPrice !== UNSET_DOUBLE) {
       internal.order.lmtPrice = changes.lmtPrice
     }
-    if (changes.auxPrice !== UNSET_DOUBLE) {
+    if (changes.auxPrice != null && changes.auxPrice !== UNSET_DOUBLE) {
       internal.order.auxPrice = changes.auxPrice
     }
+    if (changes.trailStopPrice != null && changes.trailStopPrice !== UNSET_DOUBLE) {
+      internal.order.trailStopPrice = changes.trailStopPrice
+    }
+    if (changes.trailingPercent != null && changes.trailingPercent !== UNSET_DOUBLE) {
+      internal.order.trailingPercent = changes.trailingPercent
+    }
+    if (changes.orderType) internal.order.orderType = changes.orderType
+    if (changes.tif) internal.order.tif = changes.tif
 
     const orderState = new OrderState()
     orderState.status = 'Submitted'
     return { success: true, orderId, orderState }
   }
 
-  async cancelOrder(orderId: string): Promise<boolean> {
+  async cancelOrder(orderId: string): Promise<PlaceOrderResult> {
     this._record('cancelOrder', [orderId])
     const internal = this._orders.get(orderId)
-    if (!internal || internal.status !== 'Submitted') return false
+    if (!internal || internal.status !== 'Submitted') {
+      return { success: false, error: `Order ${orderId} not found or not pending` }
+    }
     internal.status = 'Cancelled'
-    return true
+    const orderState = new OrderState()
+    orderState.status = 'Cancelled'
+    return { success: true, orderId, orderState }
   }
 
   async closePosition(contract: Contract, quantity?: Decimal): Promise<PlaceOrderResult> {
@@ -286,47 +320,54 @@ export class MockBroker implements IBroker {
     order.orderType = 'MKT'
     order.totalQuantity = quantity ?? pos.quantity
 
-    return this.placeOrder(pos.contract, order, { reduceOnly: true })
+    return this.placeOrder(pos.contract, order)
   }
 
   // ---- Queries ----
 
   async getAccount(): Promise<AccountInfo> {
     this._record('getAccount', [])
+    this._checkFail('getAccount')
     if (this._accountOverride) return this._accountOverride
 
-    let unrealizedPnL = 0
-    let marketValue = 0
+    let unrealizedPnL = new Decimal(0)
+    let marketValueAcc = new Decimal(0)
     for (const pos of this._positions.values()) {
-      const price = this._quotes.get(pos.contract.symbol ?? '') ?? pos.avgCost.toNumber()
-      const posValue = pos.quantity.toNumber() * price
-      marketValue += posValue
-      unrealizedPnL += pos.quantity.toNumber() * (price - pos.avgCost.toNumber())
+      const price = this._quotes.has(pos.contract.symbol ?? '')
+        ? new Decimal(this._quotes.get(pos.contract.symbol ?? '')!)
+        : pos.avgCost
+      const posValue = pos.quantity.mul(price)
+      marketValueAcc = marketValueAcc.plus(posValue)
+      unrealizedPnL = unrealizedPnL.plus(pos.quantity.mul(price.minus(pos.avgCost)))
     }
 
-    const cash = this._cash.toNumber()
     return {
-      netLiquidation: cash + marketValue,
-      totalCashValue: cash,
-      unrealizedPnL,
-      realizedPnL: this._realizedPnL.toNumber(),
+      baseCurrency: 'USD',
+      netLiquidation: this._cash.plus(marketValueAcc).toString(),
+      totalCashValue: this._cash.toString(),
+      unrealizedPnL: unrealizedPnL.toString(),
+      realizedPnL: this._realizedPnL.toString(),
     }
   }
 
   async getPositions(): Promise<Position[]> {
     this._record('getPositions', [])
+    this._checkFail('getPositions')
     const result: Position[] = []
     for (const pos of this._positions.values()) {
-      const price = this._quotes.get(pos.contract.symbol ?? '') ?? pos.avgCost.toNumber()
+      const price = this._quotes.has(pos.contract.symbol ?? '')
+        ? new Decimal(this._quotes.get(pos.contract.symbol ?? '')!)
+        : pos.avgCost
       result.push({
         contract: pos.contract,
+        currency: pos.contract.currency || 'USD',
         side: pos.side,
         quantity: pos.quantity,
-        avgCost: pos.avgCost.toNumber(),
-        marketPrice: price,
-        marketValue: pos.quantity.toNumber() * price,
-        unrealizedPnL: pos.quantity.toNumber() * (price - pos.avgCost.toNumber()),
-        realizedPnL: 0,
+        avgCost: pos.avgCost.toString(),
+        marketPrice: price.toString(),
+        marketValue: pos.quantity.mul(price).toString(),
+        unrealizedPnL: pos.quantity.mul(price.minus(pos.avgCost)).toString(),
+        realizedPnL: '0',
       })
     }
     return result
@@ -371,6 +412,19 @@ export class MockBroker implements IBroker {
 
   getCapabilities(): AccountCapabilities {
     return DEFAULT_CAPABILITIES
+  }
+
+  // ==================== Contract identity ====================
+
+  getNativeKey(contract: Contract): string {
+    return contract.symbol
+  }
+
+  resolveNativeKey(nativeKey: string): Contract {
+    const c = new Contract()
+    c.symbol = nativeKey
+    c.secType = 'STK'
+    return c
   }
 
   // ==================== Test helpers ====================
@@ -425,12 +479,20 @@ export class MockBroker implements IBroker {
     }
   }
 
+  /** Make the next N broker calls throw. Used to test health transitions. */
+  setFailMode(count: number): void {
+    this._failRemaining = count
+  }
+
   /** Override account info directly. Bypasses computed values from positions. */
   setAccountInfo(info: Partial<AccountInfo>): void {
-    this._accountOverride = {
-      netLiquidation: 0, totalCashValue: 0, unrealizedPnL: 0, realizedPnL: 0,
-      ...this._accountOverride, ...info,
+    const base: AccountInfo = {
+      baseCurrency: 'USD', netLiquidation: '0', totalCashValue: '0', unrealizedPnL: '0', realizedPnL: '0',
+      ...this._accountOverride,
     }
+    Object.assign(base, info)
+    if (!base.baseCurrency) base.baseCurrency = 'USD'
+    this._accountOverride = base
   }
 
   // ==================== Internal ====================

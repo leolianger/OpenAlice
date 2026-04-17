@@ -7,11 +7,12 @@
  * "No SDK route for: /commodity/..." until the corresponding fetchers are added.
  */
 
+import type { CommoditySpotPriceData, PetroleumStatusReportData, ShortTermEnergyOutlookData } from '@traderalice/opentypebb'
 import { SDKBaseClient } from './base-client.js'
 
 export class SDKCommodityClient extends SDKBaseClient {
   async getSpotPrices(params: Record<string, unknown>) {
-    return this.request('/price/spot', params)
+    return this.request<CommoditySpotPriceData>('/price/spot', params)
   }
 
   async getPsdData(params: Record<string, unknown>) {
@@ -19,11 +20,11 @@ export class SDKCommodityClient extends SDKBaseClient {
   }
 
   async getPetroleumStatus(params: Record<string, unknown>) {
-    return this.request('/petroleum_status_report', params)
+    return this.request<PetroleumStatusReportData>('/petroleum_status_report', params)
   }
 
   async getEnergyOutlook(params: Record<string, unknown>) {
-    return this.request('/short_term_energy_outlook', params)
+    return this.request<ShortTermEnergyOutlookData>('/short_term_energy_outlook', params)
   }
 
   async getPsdReport(params: Record<string, unknown>) {

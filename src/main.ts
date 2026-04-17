@@ -1,39 +1,34 @@
 import { readFile, writeFile, appendFile, mkdir } from 'fs/promises'
 import { resolve, dirname } from 'path'
 // Engine removed — AgentCenter is the top-level AI entry point
-import { loadConfig, loadTradingConfig } from './core/config.js'
+import { loadConfig, readAccountsConfig } from './core/config.js'
 import type { Plugin, EngineContext, ReconnectResult } from './core/types.js'
 import { McpPlugin } from './server/mcp.js'
 import { TelegramPlugin } from './connectors/telegram/index.js'
 import { WebPlugin } from './connectors/web/index.js'
 import { McpAskPlugin } from './connectors/mcp-ask/index.js'
 import { createThinkingTools } from './tool/thinking.js'
-import {
-  AccountManager,
-  UnifiedTradingAccount,
-  CcxtBroker,
-  createCcxtProviderTools,
-  createPlatformFromConfig,
-  createBrokerFromConfig,
-  validatePlatformRefs,
-} from './domain/trading/index.js'
+import { AccountManager, createSnapshotService, createSnapshotScheduler } from './domain/trading/index.js'
+import { FxService } from './domain/trading/fx-service.js'
 import { createTradingTools } from './tool/trading.js'
-import type { GitExportState, IPlatform } from './domain/trading/index.js'
 import { Brain } from './domain/brain/index.js'
 import { createBrainTools } from './tool/brain.js'
 import type { BrainExportState } from './domain/brain/index.js'
 import { createBrowserTools } from './tool/browser.js'
 import { SymbolIndex } from './domain/market-data/equity/index.js'
+import { CommodityCatalog } from './domain/market-data/commodity/index.js'
 import { createEquityTools } from './tool/equity.js'
-import { getSDKExecutor, buildRouteMap, SDKEquityClient, SDKCryptoClient, SDKCurrencyClient } from './domain/market-data/client/typebb/index.js'
-import type { EquityClientLike, CryptoClientLike, CurrencyClientLike } from './domain/market-data/client/types.js'
+import { getSDKExecutor, buildRouteMap, SDKEquityClient, SDKCryptoClient, SDKCurrencyClient, SDKEtfClient, SDKIndexClient, SDKDerivativesClient, SDKCommodityClient } from './domain/market-data/client/typebb/index.js'
+import type { EquityClientLike, CryptoClientLike, CurrencyClientLike, EtfClientLike, IndexClientLike, DerivativesClientLike, CommodityClientLike } from './domain/market-data/client/types.js'
 import { buildSDKCredentials } from './domain/market-data/credential-map.js'
 import { OpenBBEquityClient } from './domain/market-data/client/openbb-api/equity-client.js'
 import { OpenBBCryptoClient } from './domain/market-data/client/openbb-api/crypto-client.js'
 import { OpenBBCurrencyClient } from './domain/market-data/client/openbb-api/currency-client.js'
+import { OpenBBCommodityClient } from './domain/market-data/client/openbb-api/commodity-client.js'
 import { OpenBBServerPlugin } from './server/opentypebb.js'
 import { createMarketSearchTools } from './tool/market.js'
 import { createAnalysisTools } from './tool/analysis.js'
+import { createSessionTools } from './tool/session.js'
 import { SessionStore } from './core/session.js'
 import { ConnectorCenter } from './core/connector-center.js'
 import { ToolCenter } from './core/tool-center.js'
@@ -41,10 +36,13 @@ import { AgentCenter } from './core/agent-center.js'
 import { GenerateRouter } from './core/ai-provider-manager.js'
 import { VercelAIProvider } from './ai-providers/vercel-ai-sdk/vercel-provider.js'
 import { AgentSdkProvider } from './ai-providers/agent-sdk/agent-sdk-provider.js'
+import { CodexProvider } from './ai-providers/codex/index.js'
 import { createEventLog } from './core/event-log.js'
 import { createToolCallLog } from './core/tool-call-log.js'
+import { createListenerRegistry } from './core/listener-registry.js'
 import { createCronEngine, createCronListener, createCronTools } from './task/cron/index.js'
 import { createHeartbeat } from './task/heartbeat/index.js'
+import { createTriggerListener } from './task/trigger/index.js'
 import { NewsCollectorStore, NewsCollector } from './domain/news/index.js'
 import { createNewsArchiveTools } from './tool/news.js'
 
@@ -52,20 +50,12 @@ import { createNewsArchiveTools } from './tool/news.js'
 
 const BRAIN_FILE = resolve('data/brain/commit.json')
 
-/** Per-account git state path. Falls back to legacy paths for backward compat.
- *  TODO: remove LEGACY_GIT_PATHS before v1.0 */
-function gitFilePath(accountId: string): string {
-  return resolve(`data/trading/${accountId}/commit.json`)
-}
-const LEGACY_GIT_PATHS: Record<string, string> = {
-  'bybit-main': resolve('data/crypto-trading/commit.json'),
-  'alpaca-paper': resolve('data/securities-trading/commit.json'),
-  'alpaca-live': resolve('data/securities-trading/commit.json'),
-}
 const FRONTAL_LOBE_FILE = resolve('data/brain/frontal-lobe.md')
 const EMOTION_LOG_FILE = resolve('data/brain/emotion-log.md')
 const PERSONA_FILE = resolve('data/brain/persona.md')
-const PERSONA_DEFAULT = resolve('data/default/persona.default.md')
+const PERSONA_DEFAULT = resolve('default/persona.default.md')
+const HEARTBEAT_FILE = resolve('data/brain/heartbeat.md')
+const HEARTBEAT_DEFAULT = resolve('default/heartbeat.default.md')
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -80,97 +70,43 @@ async function readWithDefault(target: string, defaultFile: string): Promise<str
   } catch { return '' }
 }
 
-/** Create a git commit persistence callback for a given file path. */
-function createGitPersister(filePath: string) {
-  return async (state: GitExportState) => {
-    await mkdir(dirname(filePath), { recursive: true })
-    await writeFile(filePath, JSON.stringify(state, null, 2))
-  }
-}
-
-/** Read saved git state from disk, trying primary path then legacy fallback. */
-async function loadGitState(accountId: string): Promise<GitExportState | undefined> {
-  const primary = gitFilePath(accountId)
-  try {
-    return JSON.parse(await readFile(primary, 'utf-8')) as GitExportState
-  } catch { /* try legacy */ }
-  const legacy = LEGACY_GIT_PATHS[accountId]
-  if (legacy) {
-    try {
-      return JSON.parse(await readFile(legacy, 'utf-8')) as GitExportState
-    } catch { /* no saved state */ }
-  }
-  return undefined
-}
-
 async function main() {
   const config = await loadConfig()
 
+  // ==================== Event Log ====================
+
+  const eventLog = await createEventLog()
+  const toolCallLog = await createToolCallLog()
+
+  // ==================== Tool Center (created early — AccountManager needs it) ====================
+
+  const toolCenter = new ToolCenter()
+
   // ==================== Trading Account Manager ====================
 
-  const accountManager = new AccountManager()
+  const accountManager = new AccountManager({ eventLog, toolCenter })
 
-  // ==================== Platform-driven Account Init ====================
-
-  const tradingConfig = await loadTradingConfig()
-  const platformRegistry = new Map<string, IPlatform>()
-  for (const pc of tradingConfig.platforms) {
-    platformRegistry.set(pc.id, createPlatformFromConfig(pc))
+  const accountConfigs = await readAccountsConfig()
+  for (const accCfg of accountConfigs) {
+    if (accCfg.enabled === false) continue
+    await accountManager.initAccount(accCfg)
   }
-  validatePlatformRefs([...platformRegistry.values()], tradingConfig.accounts)
+  accountManager.registerCcxtToolsIfNeeded()
 
-  /** Initialize and register a single account. Returns true if successful. */
-  async function initAccount(
-    accountCfg: { id: string; platformId: string; guards: Array<{ type: string; options: Record<string, unknown> }> },
-    platform: IPlatform,
-  ): Promise<boolean> {
-    const broker = createBrokerFromConfig(platform, accountCfg)
-    try {
-      await broker.init()
-    } catch (err) {
-      console.warn(`trading: ${accountCfg.id} init failed (non-fatal):`, err)
-      return false
-    }
-    const savedState = await loadGitState(accountCfg.id)
-    const filePath = gitFilePath(accountCfg.id)
-    const uta = new UnifiedTradingAccount(broker, {
-      guards: accountCfg.guards,
-      savedState,
-      onCommit: createGitPersister(filePath),
-      platformId: accountCfg.platformId,
-    })
-    accountManager.add(uta)
-    console.log(`trading: ${uta.label} initialized`)
-    return true
-  }
+  // ==================== Snapshot ====================
 
-  // Alpaca accounts — sync init (fast, blocks startup)
-  // CCXT accounts — async background init (loadMarkets is slow)
-  const ccxtAccountConfigs: Array<{ cfg: typeof tradingConfig.accounts[number]; platform: IPlatform }> = []
-
-  for (const accCfg of tradingConfig.accounts) {
-    const platform = platformRegistry.get(accCfg.platformId)!
-    if (platform.providerType === 'alpaca') {
-      await initAccount(accCfg, platform)
-    } else {
-      ccxtAccountConfigs.push({ cfg: accCfg, platform })
-    }
-  }
-
-  // CCXT init in background — register tools when ready
-  const ccxtInitPromise = ccxtAccountConfigs.length > 0
-    ? (async () => {
-        for (const { cfg, platform } of ccxtAccountConfigs) {
-          await initAccount(cfg, platform)
-        }
-      })()
-    : Promise.resolve()
+  const snapshotService = createSnapshotService({ accountManager, eventLog })
+  accountManager.setSnapshotHooks({
+    onPostPush: (id) => { snapshotService.takeSnapshot(id, 'post-push') },
+    onPostReject: (id) => { snapshotService.takeSnapshot(id, 'post-reject') },
+  })
 
   // ==================== Brain ====================
 
-  const [brainExport, persona] = await Promise.all([
+  const [brainExport] = await Promise.all([
     readFile(BRAIN_FILE, 'utf-8').then((r) => JSON.parse(r) as BrainExportState).catch(() => undefined),
     readWithDefault(PERSONA_FILE, PERSONA_DEFAULT),
+    readWithDefault(HEARTBEAT_FILE, HEARTBEAT_DEFAULT),
   ])
 
   const brainDir = resolve('data/brain')
@@ -192,22 +128,21 @@ async function main() {
     ? Brain.restore(brainExport, { onCommit: brainOnCommit })
     : new Brain({ onCommit: brainOnCommit })
 
-  const frontalLobe = brain.getFrontalLobe()
-  const emotion = brain.getEmotion().current
-  const instructions = [
-    persona,
-    '---',
-    '## Current Brain State',
-    '',
-    `**Frontal Lobe:** ${frontalLobe || '(empty)'}`,
-    '',
-    `**Emotion:** ${emotion}`,
-  ].join('\n')
-
-  // ==================== Event Log ====================
-
-  const eventLog = await createEventLog()
-  const toolCallLog = await createToolCallLog()
+  /** Re-read persona from disk + live brain state on each request. */
+  const getInstructions = async () => {
+    const persona = await readFile(PERSONA_FILE, 'utf-8').catch(() => '')
+    const frontalLobe = brain.getFrontalLobe()
+    const emotion = brain.getEmotion().current
+    return [
+      persona,
+      '---',
+      '## Current Brain State',
+      '',
+      `**Frontal Lobe:** ${frontalLobe || '(empty)'}`,
+      '',
+      `**Emotion:** ${emotion}`,
+    ].join('\n')
+  }
 
   // ==================== Cron ====================
 
@@ -228,6 +163,10 @@ async function main() {
   let equityClient: EquityClientLike
   let cryptoClient: CryptoClientLike
   let currencyClient: CurrencyClientLike
+  let commodityClient: CommodityClientLike
+  let etfClient: EtfClientLike | undefined
+  let indexClient: IndexClientLike | undefined
+  let derivativesClient: DerivativesClientLike | undefined
 
   if (config.marketData.backend === 'openbb-api') {
     const url = config.marketData.apiUrl
@@ -235,6 +174,7 @@ async function main() {
     equityClient = new OpenBBEquityClient(url, providers.equity, keys)
     cryptoClient = new OpenBBCryptoClient(url, providers.crypto, keys)
     currencyClient = new OpenBBCurrencyClient(url, providers.currency, keys)
+    commodityClient = new OpenBBCommodityClient(url, providers.commodity, keys)
   } else {
     const executor = getSDKExecutor()
     const routeMap = buildRouteMap()
@@ -242,35 +182,46 @@ async function main() {
     equityClient = new SDKEquityClient(executor, 'equity', providers.equity, credentials, routeMap)
     cryptoClient = new SDKCryptoClient(executor, 'crypto', providers.crypto, credentials, routeMap)
     currencyClient = new SDKCurrencyClient(executor, 'currency', providers.currency, credentials, routeMap)
+    commodityClient = new SDKCommodityClient(executor, 'commodity', providers.commodity, credentials, routeMap)
+    etfClient = new SDKEtfClient(executor, 'etf', providers.equity, credentials, routeMap)
+    indexClient = new SDKIndexClient(executor, 'index', providers.equity, credentials, routeMap)
+    derivativesClient = new SDKDerivativesClient(executor, 'derivatives', providers.equity, credentials, routeMap)
   }
 
   // OpenBB API server is started later via optionalPlugins
+
+  // ==================== FX Service ====================
+
+  const fxService = new FxService(currencyClient)
+  accountManager.setFxService(fxService)
 
   // ==================== Equity Symbol Index ====================
 
   const symbolIndex = new SymbolIndex()
   await symbolIndex.load(equityClient)
 
-  // ==================== Tool Center ====================
+  const commodityCatalog = new CommodityCatalog()
+  commodityCatalog.load()
 
-  const toolCenter = new ToolCenter()
+  // ==================== Tool Registration ====================
+
   toolCenter.register(createThinkingTools(), 'thinking')
 
   // One unified set of trading tools — routes via `source` parameter at runtime
   toolCenter.register(
-    createTradingTools(accountManager),
+    createTradingTools(accountManager, fxService),
     'trading',
   )
 
   toolCenter.register(createBrainTools(brain), 'brain')
   toolCenter.register(createBrowserTools(), 'browser')
   toolCenter.register(createCronTools(cronEngine), 'cron')
-  toolCenter.register(createMarketSearchTools(symbolIndex, cryptoClient, currencyClient), 'market-search')
+  toolCenter.register(createMarketSearchTools(symbolIndex, cryptoClient, currencyClient, commodityCatalog), 'market-search')
   toolCenter.register(createEquityTools(equityClient), 'equity')
   if (config.news.enabled) {
     toolCenter.register(createNewsArchiveTools(newsStore), 'news')
   }
-  toolCenter.register(createAnalysisTools(equityClient, cryptoClient, currencyClient), 'analysis')
+  toolCenter.register(createAnalysisTools(equityClient, cryptoClient, currencyClient, commodityClient), 'analysis')
 
   console.log(`tool-center: ${toolCenter.list().length} tools registered`)
 
@@ -278,14 +229,18 @@ async function main() {
 
   const vercelProvider = new VercelAIProvider(
     () => toolCenter.getVercelTools(),
-    instructions,
+    getInstructions,
     config.agent.maxSteps,
   )
   const agentSdkProvider = new AgentSdkProvider(
     () => toolCenter.getVercelTools(),
-    instructions,
+    getInstructions,
   )
-  const router = new GenerateRouter(vercelProvider, agentSdkProvider)
+  const codexProvider = new CodexProvider(
+    () => toolCenter.getVercelTools(),
+    getInstructions,
+  )
+  const router = new GenerateRouter(vercelProvider, agentSdkProvider, codexProvider)
 
   const agentCenter = new AgentCenter({
     router,
@@ -293,29 +248,58 @@ async function main() {
     toolCallLog,
   })
 
+  // ==================== Listener Registry ====================
+
+  const listenerRegistry = createListenerRegistry(eventLog)
+
   // ==================== Connector Center ====================
 
-  const connectorCenter = new ConnectorCenter(eventLog)
+  const connectorCenter = new ConnectorCenter({ eventLog, listenerRegistry })
 
-  // ==================== Cron Lifecycle ====================
+  // Session awareness tools (registered here because they need connectorCenter)
+  toolCenter.register(createSessionTools(connectorCenter), 'session')
 
-  await cronEngine.start()
+  // ==================== Cron Listener ====================
+
   const cronSession = new SessionStore('cron/default')
   await cronSession.restore()
-  const cronListener = createCronListener({ connectorCenter, eventLog, agentCenter, session: cronSession })
-  cronListener.start()
-  console.log('cron: engine + listener started')
+  const cronListener = createCronListener({ connectorCenter, agentCenter, registry: listenerRegistry, session: cronSession })
+  await cronListener.start()
+
+  // ==================== Snapshot Scheduler ====================
+
+  const snapshotScheduler = createSnapshotScheduler({ snapshotService, cronEngine, registry: listenerRegistry, config: config.snapshot })
+  await snapshotScheduler.start()
+  if (config.snapshot.enabled) {
+    console.log(`snapshot: scheduler started (every ${config.snapshot.every})`)
+  }
 
   // ==================== Heartbeat ====================
 
   const heartbeat = createHeartbeat({
     config: config.heartbeat,
-    connectorCenter, cronEngine, eventLog, agentCenter,
+    connectorCenter, cronEngine, agentCenter, registry: listenerRegistry,
   })
   await heartbeat.start()
   if (config.heartbeat.enabled) {
     console.log(`heartbeat: enabled (every ${config.heartbeat.every})`)
   }
+
+  // ==================== Trigger Listener (external event router) ====================
+
+  const triggerSession = new SessionStore('trigger/default')
+  await triggerSession.restore()
+  const triggerListener = createTriggerListener({
+    connectorCenter, agentCenter, registry: listenerRegistry, session: triggerSession,
+  })
+  await triggerListener.start()
+
+  // ==================== Activate Listeners + Start Cron Engine ====================
+
+  await listenerRegistry.start()
+  await cronEngine.start()
+  console.log(`listener-registry: started (${listenerRegistry.list().length} listeners)`)
+  console.log('cron: engine started')
 
   // ==================== News Collector ====================
 
@@ -328,68 +312,6 @@ async function main() {
     })
     newsCollector.start()
     console.log(`news-collector: started (${config.news.feeds.length} feeds, every ${config.news.intervalMinutes}m)`)
-  }
-
-  // ==================== Account Reconnect ====================
-
-  const reconnectingAccounts = new Set<string>()
-
-  const reconnectAccount = async (accountId: string): Promise<ReconnectResult> => {
-    if (reconnectingAccounts.has(accountId)) {
-      return { success: false, error: 'Reconnect already in progress' }
-    }
-    reconnectingAccounts.add(accountId)
-    try {
-      // Re-read trading config to pick up credential/guard changes
-      const freshTrading = await loadTradingConfig()
-
-      // Close old account
-      const currentUta = accountManager.get(accountId)
-      if (currentUta) {
-        await currentUta.close()
-        accountManager.remove(accountId)
-      }
-
-      // Find this account in fresh config
-      const accCfg = freshTrading.accounts.find((a) => a.id === accountId)
-      if (!accCfg) {
-        return { success: true, message: `Account "${accountId}" not found in config (removed or disabled)` }
-      }
-
-      // Build platform registry from fresh config
-      const freshPlatforms = new Map<string, IPlatform>()
-      for (const pc of freshTrading.platforms) {
-        freshPlatforms.set(pc.id, createPlatformFromConfig(pc))
-      }
-
-      const platform = freshPlatforms.get(accCfg.platformId)
-      if (!platform) {
-        return { success: false, error: `Platform "${accCfg.platformId}" not found for account "${accountId}"` }
-      }
-
-      const ok = await initAccount(accCfg, platform)
-      if (!ok) {
-        return { success: false, error: `Account "${accountId}" init failed` }
-      }
-
-      // Re-register CCXT-specific tools if this is a CCXT account
-      if (platform.providerType !== 'alpaca') {
-        toolCenter.register(
-          createCcxtProviderTools(accountManager),
-          'trading-ccxt',
-        )
-      }
-
-      const label = accountManager.get(accountId)?.label ?? accountId
-      console.log(`reconnect: ${label} online`)
-      return { success: true, message: `${label} reconnected` }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error(`reconnect: ${accountId} failed:`, msg)
-      return { success: false, error: msg }
-    } finally {
-      reconnectingAccounts.delete(accountId)
-    }
   }
 
   // ==================== Plugins ====================
@@ -507,8 +429,10 @@ async function main() {
 
   const ctx: EngineContext = {
     config, connectorCenter, agentCenter, eventLog, toolCallLog, heartbeat, cronEngine, toolCenter,
-    accountManager,
-    reconnectAccount,
+    listenerRegistry,
+    bbEngine: getSDKExecutor(),
+    accountManager, fxService, snapshotService,
+    newsProvider: newsStore,
     reconnectConnectors,
   }
 
@@ -519,32 +443,18 @@ async function main() {
 
   console.log('engine: started')
 
-  // ==================== CCXT Background Injection ====================
-  // CCXT accounts init in background (loadMarkets is slow). When done, register
-  // CCXT-specific tools so the next agent call picks them up automatically.
-  ccxtInitPromise.then(() => {
-    // Check if any CCXT accounts were successfully registered
-    const hasCcxt = accountManager.resolve().some((uta) => uta.broker instanceof CcxtBroker)
-    if (!hasCcxt) return
-
-    toolCenter.register(
-      createCcxtProviderTools(accountManager),
-      'trading-ccxt',
-    )
-    console.log('ccxt: provider tools registered')
-  }).catch((err) => {
-    console.error('ccxt: background init failed:', err instanceof Error ? err.message : String(err))
-  })
-
   // ==================== Shutdown ====================
 
   let stopped = false
   const shutdown = async () => {
     stopped = true
     newsCollector?.stop()
+    snapshotScheduler.stop()
     heartbeat.stop()
+    triggerListener.stop()
     cronListener.stop()
     cronEngine.stop()
+    await listenerRegistry.stop()
     for (const plugin of [...corePlugins, ...optionalPlugins.values()]) {
       await plugin.stop()
     }

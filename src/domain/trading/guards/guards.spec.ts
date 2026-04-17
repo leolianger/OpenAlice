@@ -41,10 +41,11 @@ function makeContext(overrides: {
     operation: overrides.operation ?? makePlaceOrderOp(),
     positions: overrides.positions ?? [],
     account: {
-      netLiquidation: 100_000,
-      totalCashValue: 100_000,
-      unrealizedPnL: 0,
-      realizedPnL: 0,
+      baseCurrency: 'USD',
+      netLiquidation: '100000',
+      totalCashValue: '100000',
+      unrealizedPnL: '0',
+      realizedPnL: '0',
       ...overrides.account,
     },
   }
@@ -57,7 +58,7 @@ describe('MaxPositionSizeGuard', () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 20_000 }),
-      account: { netLiquidation: 100_000 },
+      account: { netLiquidation: '100000' },
     })
 
     expect(guard.check(ctx)).toBeNull()
@@ -67,7 +68,7 @@ describe('MaxPositionSizeGuard', () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 30_000 }),
-      account: { netLiquidation: 100_000 },
+      account: { netLiquidation: '100000' },
     })
 
     const result = guard.check(ctx)
@@ -80,8 +81,8 @@ describe('MaxPositionSizeGuard', () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 10_000 }),
-      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: 20_000 })],
-      account: { netLiquidation: 100_000 },
+      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: '20000' })],
+      account: { netLiquidation: '100000' },
     })
 
     const result = guard.check(ctx)
@@ -94,7 +95,7 @@ describe('MaxPositionSizeGuard', () => {
     const guard = new MaxPositionSizeGuard({})
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 26_000 }),
-      account: { netLiquidation: 100_000 },
+      account: { netLiquidation: '100000' },
     })
     expect(guard.check(ctx)).not.toBeNull()
   })
@@ -247,7 +248,7 @@ describe('createGuardPipeline', () => {
 
   it('fetches positions and account info for guard context', async () => {
     const dispatcher = vi.fn().mockResolvedValue({ success: true })
-    const account = new MockBroker({ accountInfo: { netLiquidation: 105_000, totalCashValue: 100_000, unrealizedPnL: 5_000, realizedPnL: 1_000 } })
+    const account = new MockBroker({ accountInfo: { netLiquidation: '105000', totalCashValue: '100000', unrealizedPnL: '5000', realizedPnL: '1000' } })
     account.setPositions([makePosition()])
 
     let capturedCtx: GuardContext | undefined
@@ -261,7 +262,7 @@ describe('createGuardPipeline', () => {
 
     expect(capturedCtx).toBeDefined()
     expect(capturedCtx!.positions).toHaveLength(1)
-    expect(capturedCtx!.account.netLiquidation).toBe(105_000)
+    expect(capturedCtx!.account.netLiquidation).toBe('105000')
   })
 })
 

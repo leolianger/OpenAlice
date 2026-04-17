@@ -7,6 +7,11 @@
 
 import type { OBBjectResponse } from '../../equity/types/base'
 import { buildCredentialsHeader } from '../../credential-map'
+import type {
+  EquitySearchData, EquityHistoricalData, EquityInfoData, KeyMetricsData,
+  IncomeStatementData, BalanceSheetData, CashFlowStatementData, FinancialRatiosData,
+  PriceTargetConsensusData, CalendarEarningsData, InsiderTradingData, EquityDiscoveryData,
+} from '@traderalice/opentypebb'
 
 export class OpenBBEquityClient {
   private baseUrl: string
@@ -22,7 +27,7 @@ export class OpenBBEquityClient {
   // ==================== Price ====================
 
   async getHistorical(params: Record<string, unknown>) {
-    return this.request('/price/historical', params)
+    return this.request<EquityHistoricalData>('/price/historical', params)
   }
 
   async getQuote(params: Record<string, unknown>) {
@@ -40,7 +45,7 @@ export class OpenBBEquityClient {
   // ==================== Info ====================
 
   async search(params: Record<string, unknown>) {
-    return this.request('/search', params)
+    return this.request<EquitySearchData>('/search', params)
   }
 
   async screener(params: Record<string, unknown>) {
@@ -48,7 +53,7 @@ export class OpenBBEquityClient {
   }
 
   async getProfile(params: Record<string, unknown>) {
-    return this.request('/profile', params)
+    return this.request<EquityInfoData>('/profile', params)
   }
 
   async getMarketSnapshots(params: Record<string, unknown> = {}) {
@@ -62,7 +67,7 @@ export class OpenBBEquityClient {
   // ==================== Fundamental ====================
 
   async getBalanceSheet(params: Record<string, unknown>) {
-    return this.request('/fundamental/balance', params)
+    return this.request<BalanceSheetData>('/fundamental/balance', params)
   }
 
   async getBalanceSheetGrowth(params: Record<string, unknown>) {
@@ -70,7 +75,7 @@ export class OpenBBEquityClient {
   }
 
   async getIncomeStatement(params: Record<string, unknown>) {
-    return this.request('/fundamental/income', params)
+    return this.request<IncomeStatementData>('/fundamental/income', params)
   }
 
   async getIncomeStatementGrowth(params: Record<string, unknown>) {
@@ -78,7 +83,7 @@ export class OpenBBEquityClient {
   }
 
   async getCashFlow(params: Record<string, unknown>) {
-    return this.request('/fundamental/cash', params)
+    return this.request<CashFlowStatementData>('/fundamental/cash', params)
   }
 
   async getCashFlowGrowth(params: Record<string, unknown>) {
@@ -90,11 +95,11 @@ export class OpenBBEquityClient {
   }
 
   async getFinancialRatios(params: Record<string, unknown>) {
-    return this.request('/fundamental/ratios', params)
+    return this.request<FinancialRatiosData>('/fundamental/ratios', params)
   }
 
   async getKeyMetrics(params: Record<string, unknown>) {
-    return this.request('/fundamental/metrics', params)
+    return this.request<KeyMetricsData>('/fundamental/metrics', params)
   }
 
   async getDividends(params: Record<string, unknown>) {
@@ -172,7 +177,7 @@ export class OpenBBEquityClient {
   }
 
   async getCalendarEarnings(params: Record<string, unknown> = {}) {
-    return this.request('/calendar/earnings', params)
+    return this.request<CalendarEarningsData>('/calendar/earnings', params)
   }
 
   async getCalendarEvents(params: Record<string, unknown> = {}) {
@@ -190,7 +195,7 @@ export class OpenBBEquityClient {
   }
 
   async getEstimateConsensus(params: Record<string, unknown>) {
-    return this.request('/estimates/consensus', params)
+    return this.request<PriceTargetConsensusData>('/estimates/consensus', params)
   }
 
   async getAnalystSearch(params: Record<string, unknown>) {
@@ -216,15 +221,15 @@ export class OpenBBEquityClient {
   // ==================== Discovery ====================
 
   async getGainers(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/gainers', params)
+    return this.request<EquityDiscoveryData>('/discovery/gainers', params)
   }
 
   async getLosers(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/losers', params)
+    return this.request<EquityDiscoveryData>('/discovery/losers', params)
   }
 
   async getActive(params: Record<string, unknown> = {}) {
-    return this.request('/discovery/active', params)
+    return this.request<EquityDiscoveryData>('/discovery/active', params)
   }
 
   async getUndervaluedLargeCaps(params: Record<string, unknown> = {}) {
@@ -266,7 +271,7 @@ export class OpenBBEquityClient {
   }
 
   async getInsiderTrading(params: Record<string, unknown>) {
-    return this.request('/ownership/insider_trading', params)
+    return this.request<InsiderTradingData>('/ownership/insider_trading', params)
   }
 
   async getShareStatistics(params: Record<string, unknown>) {

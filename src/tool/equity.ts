@@ -81,21 +81,6 @@ If unsure about the symbol, use marketSearchForResearch to find it.`,
       },
     }),
 
-    equityGetEstimates: tool({
-      description: `Get analyst consensus estimates for a stock.
-
-Returns consensus rating (buy/hold/sell counts), average target price, and EPS estimates.
-Useful for understanding how the market views a stock's prospects.
-
-If unsure about the symbol, use marketSearchForResearch to find it.`,
-      inputSchema: z.object({
-        symbol: z.string().describe('Ticker symbol, e.g. "AAPL"'),
-      }),
-      execute: async ({ symbol }) => {
-        return await equityClient.getEstimateConsensus({ symbol, provider: 'yfinance' })
-      },
-    }),
-
     equityGetEarningsCalendar: tool({
       description: `Get upcoming and recent earnings release dates.
 

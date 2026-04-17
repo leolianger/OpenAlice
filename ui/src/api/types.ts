@@ -1,28 +1,56 @@
-// ==================== Channels ====================
+// ==================== AI Provider Profiles ====================
 
-export interface VercelAiSdkOverride {
-  provider: string
+export type AIBackend = 'agent-sdk' | 'codex' | 'vercel-ai-sdk'
+
+export interface Profile {
+  backend: AIBackend
   model: string
+  preset?: string     // preset ID this profile was created from
+  loginMethod?: string
+  provider?: string   // vercel-ai-sdk only
   baseUrl?: string
   apiKey?: string
 }
 
-export type LoginMethod = 'api-key' | 'claudeai'
+// ==================== AI Provider Presets ====================
 
-export interface AgentSdkOverride {
-  model?: string
-  baseUrl?: string
-  apiKey?: string
-  loginMethod?: LoginMethod
+export interface Preset {
+  id: string
+  label: string
+  description: string
+  category: 'official' | 'third-party' | 'custom'
+  hint?: string
+  defaultName: string
+  schema: JsonSchema
 }
+
+/** Subset of JSON Schema types we use for form rendering. */
+export interface JsonSchema {
+  type?: string
+  properties?: Record<string, JsonSchemaProperty>
+  required?: string[]
+  [key: string]: unknown
+}
+
+export interface JsonSchemaProperty {
+  type?: string
+  const?: unknown
+  enum?: string[]
+  oneOf?: Array<{ const: string; title: string }>
+  default?: unknown
+  title?: string
+  description?: string
+  writeOnly?: boolean
+  [key: string]: unknown
+}
+
+// ==================== Channels ====================
 
 export interface WebChannel {
   id: string
   label: string
   systemPrompt?: string
-  provider?: 'claude-code' | 'vercel-ai-sdk' | 'agent-sdk'
-  vercelAiSdk?: VercelAiSdkOverride
-  agentSdk?: AgentSdkOverride
+  profile?: string    // slug reference to a profile
   disabledTools?: string[]
 }
 
@@ -60,12 +88,9 @@ export type ChatHistoryItem =
 // ==================== Config ====================
 
 export interface AIProviderConfig {
-  backend: string
-  provider: string
-  model: string
-  baseUrl?: string
-  loginMethod?: LoginMethod
   apiKeys: { anthropic?: string; openai?: string; google?: string }
+  profiles: Record<string, Profile>
+  activeProfile: string
 }
 
 export interface AppConfig {
@@ -78,6 +103,10 @@ export interface AppConfig {
     every: string
     prompt: string
     activeHours: { start: string; end: string; timezone: string } | null
+  }
+  snapshot: {
+    enabled: boolean
+    every: string
   }
   connectors: ConnectorsConfig
   [key: string]: unknown
@@ -95,6 +124,19 @@ export interface ConnectorsConfig {
   }
 }
 
+// ==================== Topology ====================
+
+export interface TopologyListener {
+  name: string
+  eventType: string
+  emits: string[]
+}
+
+export interface TopologyResponse {
+  eventTypes: string[]
+  listeners: TopologyListener[]
+}
+
 // ==================== News Collector ====================
 
 export interface NewsCollectorFeed {
@@ -110,6 +152,23 @@ export interface NewsCollectorConfig {
   maxInMemory: number
   retentionDays: number
   feeds: NewsCollectorFeed[]
+}
+
+// ==================== News Articles ====================
+
+export interface NewsArticle {
+  time: string
+  title: string
+  content: string
+  source: string | null
+  link: string | null
+  categories: string | null
+}
+
+export interface NewsListResponse {
+  items: NewsArticle[]
+  count: number
+  lookback: string
 }
 
 // ==================== Events ====================
@@ -147,6 +206,25 @@ export interface CronJob {
 
 // ==================== Trading ====================
 
+export type BrokerHealth = 'healthy' | 'degraded' | 'offline'
+
+export interface BrokerHealthInfo {
+  status: BrokerHealth
+  consecutiveFailures: number
+  lastError?: string
+  lastSuccessAt?: string
+  lastFailureAt?: string
+  recovering: boolean
+  disabled: boolean
+}
+
+export interface AccountSummary {
+  id: string
+  label: string
+  capabilities: { supportedSecTypes: string[]; supportedOrderTypes: string[] }
+  health: BrokerHealthInfo
+}
+
 export interface TradingAccount {
   id: string
   provider: string
@@ -154,13 +232,14 @@ export interface TradingAccount {
 }
 
 export interface AccountInfo {
-  netLiquidation: number
-  totalCashValue: number
-  unrealizedPnL: number
-  realizedPnL: number
-  buyingPower?: number
-  initMarginReq?: number
-  maintMarginReq?: number
+  baseCurrency: string
+  netLiquidation: string
+  totalCashValue: string
+  unrealizedPnL: string
+  realizedPnL: string
+  buyingPower?: string
+  initMarginReq?: string
+  maintMarginReq?: string
 }
 
 export interface Position {
@@ -176,16 +255,16 @@ export interface Position {
     multiplier?: number
     localSymbol?: string
   }
+  /** Currency denomination of all monetary fields. */
+  currency: string
   side: 'long' | 'short'
   quantity: string // Decimal serialized as string
-  avgCost: number
-  marketPrice: number
-  marketValue: number
-  unrealizedPnL: number
-  realizedPnL: number
-  leverage?: number
-  margin?: number
-  liquidationPrice?: number
+  /** All monetary fields are strings to prevent IEEE 754 floating-point artifacts. */
+  avgCost: string
+  marketPrice: string
+  marketValue: string
+  unrealizedPnL: string
+  realizedPnL: string
 }
 
 export interface WalletCommitLog {
@@ -250,35 +329,100 @@ export interface ToolCallRecord {
 
 // ==================== Trading Config ====================
 
-export interface CcxtPlatformConfig {
-  id: string
-  label?: string
-  type: 'ccxt'
-  exchange: string
-  sandbox: boolean
-  demoTrading: boolean
-}
-
-export interface AlpacaPlatformConfig {
-  id: string
-  label?: string
-  type: 'alpaca'
-  paper: boolean
-}
-
-export type PlatformConfig = CcxtPlatformConfig | AlpacaPlatformConfig
-
 export interface AccountConfig {
   id: string
-  platformId: string
   label?: string
-  apiKey?: string
-  apiSecret?: string
-  password?: string
+  type: string
+  enabled: boolean
   guards: GuardEntry[]
+  brokerConfig: Record<string, unknown>
+}
+
+// ==================== Broker Type Metadata (from /broker-types endpoint) ====================
+
+export interface BrokerConfigField {
+  name: string
+  type: 'text' | 'password' | 'number' | 'boolean' | 'select'
+  label: string
+  placeholder?: string
+  default?: unknown
+  required?: boolean
+  options?: Array<{ value: string; label: string }>
+  description?: string
+  sensitive?: boolean
+}
+
+export interface SubtitleField {
+  field: string
+  label?: string
+  falseLabel?: string
+  prefix?: string
+}
+
+export interface BrokerTypeInfo {
+  type: string
+  name: string
+  description: string
+  /** Multi-line setup guide shown in the New Account wizard. Paragraphs separated by `\n\n`. */
+  setupGuide?: string
+  badge: string
+  badgeColor: string
+  fields: BrokerConfigField[]
+  subtitleFields: SubtitleField[]
+  guardCategory: 'crypto' | 'securities'
 }
 
 export interface GuardEntry {
   type: string
   options: Record<string, unknown>
+}
+
+export interface TestConnectionResult {
+  success: boolean
+  error?: string
+  account?: unknown
+}
+
+// ==================== Snapshots ====================
+
+export interface UTASnapshotSummary {
+  accountId: string
+  timestamp: string
+  trigger: string
+  account: {
+    baseCurrency: string
+    netLiquidation: string
+    totalCashValue: string
+    unrealizedPnL: string
+    realizedPnL: string
+    buyingPower?: string
+    initMarginReq?: string
+    maintMarginReq?: string
+  }
+  positions: Array<{
+    aliceId: string
+    currency: string
+    side: 'long' | 'short'
+    quantity: string
+    avgCost: string
+    marketPrice: string
+    marketValue: string
+    unrealizedPnL: string
+    realizedPnL: string
+  }>
+  openOrders: Array<{
+    orderId: string
+    aliceId: string
+    action: string
+    orderType: string
+    totalQuantity: string
+    status: string
+  }>
+  health: string
+}
+
+export interface EquityCurvePoint {
+  timestamp: string
+  equity: string
+  accounts: Record<string, string>
 }

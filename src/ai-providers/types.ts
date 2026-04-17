@@ -1,6 +1,7 @@
 import type { ISessionStore, SessionEntry } from '../core/session.js'
 import type { CompactionConfig, CompactionResult } from '../core/compaction.js'
 import type { MediaAttachment } from '../core/types.js'
+import type { ResolvedProfile } from '../core/config.js'
 
 // ==================== Provider Events ====================
 
@@ -30,8 +31,8 @@ export interface GenerateOpts {
   /** Max history entries to include (text providers only). */
   maxHistoryEntries?: number
   disabledTools?: string[]
-  vercelAiSdk?: { provider: string; model: string; baseUrl?: string; apiKey?: string }
-  agentSdk?: { model?: string; apiKey?: string; baseUrl?: string }
+  /** Resolved profile — contains model, apiKey, baseUrl, etc. */
+  profile?: ResolvedProfile
 }
 
 // ==================== AIProvider ====================
@@ -44,9 +45,9 @@ export interface GenerateOpts {
  */
 export interface AIProvider {
   /** Session log provenance tag. */
-  readonly providerTag: 'vercel-ai' | 'claude-code' | 'agent-sdk'
-  /** Stateless one-shot prompt (used for compaction summarization, etc.). */
-  ask(prompt: string): Promise<ProviderResult>
+  readonly providerTag: 'vercel-ai' | 'claude-code' | 'agent-sdk' | 'codex'
+  /** Stateless one-shot prompt. Profile controls auth/model/endpoint. */
+  ask(prompt: string, profile?: ResolvedProfile): Promise<ProviderResult>
   /** Stream events from the backend. Yields tool_use/tool_result/text, then done. */
   generate(entries: SessionEntry[], prompt: string, opts?: GenerateOpts): AsyncIterable<ProviderEvent>
   /**
