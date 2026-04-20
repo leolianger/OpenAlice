@@ -26,7 +26,6 @@ function daysForTimeframe(tf: Timeframe): number | null {
 }
 
 function toUTCTimestamp(dateStr: string): UTCTimestamp {
-  // Historical rows use `YYYY-MM-DD`; treat as UTC midnight.
   return Math.floor(new Date(`${dateStr}T00:00:00Z`).getTime() / 1000) as UTCTimestamp
 }
 
@@ -38,6 +37,7 @@ interface Props {
 export function KlinePanel({ selection }: Props) {
   const [tf, setTf] = useState<Timeframe>('1Y')
   const [bars, setBars] = useState<HistoricalBar[] | null>(null)
+  const [provider, setProvider] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -46,37 +46,33 @@ export function KlinePanel({ selection }: Props) {
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volumeRef = useRef<ISeriesApi<'Histogram'> | null>(null)
 
-  // Fetch bars when selection/timeframe changes.
+  // Fetch bars once per symbol (NOT per timeframe — timeframe is client-side zoom).
   useEffect(() => {
-    if (!selection) { setBars(null); setError(null); return }
+    if (!selection) { setBars(null); setProvider(null); setError(null); return }
     if (selection.assetClass === 'commodity') {
       setBars(null)
+      setProvider(null)
       setError('Commodity K-line support is coming in the next step.')
       return
     }
     setLoading(true)
     setError(null)
-    const days = daysForTimeframe(tf)
-    const opts: { interval: string; startDate?: string } = { interval: '1d' }
-    if (days) {
-      const start = new Date()
-      start.setDate(start.getDate() - days)
-      opts.startDate = start.toISOString().slice(0, 10)
-    }
-    marketApi.historical(selection.assetClass, selection.symbol, opts)
+    marketApi.historical(selection.assetClass, selection.symbol, { interval: '1d' })
       .then((res) => {
         if (res.error || !res.results) {
           setError(res.error ?? 'No data returned.')
           setBars(null)
+          setProvider(null)
         } else {
           setBars(res.results)
+          setProvider(res.provider || null)
         }
       })
-      .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setBars(null) })
+      .catch((e) => { setError(e instanceof Error ? e.message : String(e)); setBars(null); setProvider(null) })
       .finally(() => setLoading(false))
-  }, [selection, tf])
+  }, [selection])
 
-  // Build chart once container is mounted.
+  // Build chart once.
   useEffect(() => {
     if (!containerRef.current) return
     const chart = createChart(containerRef.current, {
@@ -145,8 +141,23 @@ export function KlinePanel({ selection }: Props) {
 
     candleRef.current.setData(candleData)
     volumeRef.current.setData(volumeData)
-    chartRef.current?.timeScale().fitContent()
   }, [bars])
+
+  // Apply visible range whenever timeframe or bars change.
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || !bars || bars.length === 0) return
+
+    const days = daysForTimeframe(tf)
+    if (!days) {
+      chart.timeScale().fitContent()
+      return
+    }
+    const lastTime = toUTCTimestamp(bars[bars.length - 1].date)
+    const firstAvailable = toUTCTimestamp(bars[0].date)
+    const from = Math.max(lastTime - days * 86400, firstAvailable) as UTCTimestamp
+    chart.timeScale().setVisibleRange({ from, to: lastTime })
+  }, [tf, bars])
 
   const title = useMemo(() => {
     if (!selection) return 'Select a symbol'
@@ -156,7 +167,19 @@ export function KlinePanel({ selection }: Props) {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between py-2 px-1">
-        <div className="text-[13px] font-medium text-text">{title}</div>
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-medium text-text">{title}</span>
+          {provider && (
+            <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-bg-tertiary text-text-muted font-medium">
+              {provider}
+            </span>
+          )}
+          {bars && bars.length > 0 && (
+            <span className="text-[11px] text-text-muted/60">
+              {bars.length} bars · {bars[0].date} → {bars[bars.length - 1].date}
+            </span>
+          )}
+        </div>
         <div className="flex border border-border rounded overflow-hidden">
           {TIMEFRAMES.map((t, i) => (
             <button
