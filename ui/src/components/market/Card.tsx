@@ -15,12 +15,12 @@ interface Props {
  */
 export function Card({ title, right, className, contentClassName, children }: Props) {
   return (
-    <section className={`flex flex-col border border-border rounded bg-bg-secondary/30 min-h-0 ${className ?? ''}`}>
+    <section className={`flex flex-col border border-border rounded bg-bg-secondary/30 ${className ?? ''}`}>
       <header className="flex items-center justify-between gap-3 px-3 py-2 border-b border-border/60">
         <h3 className="text-[13px] font-medium text-text truncate">{title}</h3>
         {right && <div className="shrink-0">{right}</div>}
       </header>
-      <div className={`flex-1 min-h-0 ${contentClassName ?? 'p-3'}`}>{children}</div>
+      <div className={contentClassName ?? 'p-3'}>{children}</div>
     </section>
   )
 }

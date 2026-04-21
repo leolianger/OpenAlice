@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { marketApi, type SearchResult, type AssetClass } from '../../api/market'
 
 const ASSET_CLASS_COLORS: Record<AssetClass, string> = {
@@ -19,6 +19,7 @@ function resultSymbol(r: SearchResult): string {
 
 export function SearchBox() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(false)
@@ -64,7 +65,13 @@ export function SearchBox() {
     if (!sym) return
     setOpen(false)
     setQuery('')
-    navigate(`/market/${r.assetClass}/${encodeURIComponent(sym)}`)
+    // Preserve K-line interval/range across symbol switches so the user's
+    // preferred view settings carry over.
+    const qs = searchParams.toString()
+    navigate({
+      pathname: `/market/${r.assetClass}/${encodeURIComponent(sym)}`,
+      search: qs ? `?${qs}` : '',
+    })
   }
 
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {

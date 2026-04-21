@@ -10,7 +10,7 @@ interface Props {
 
 export function EquityDetail({ symbol }: Props) {
   return (
-    <div className="flex flex-col gap-3 min-h-0">
+    <div className="flex flex-col gap-3">
       <QuoteHeader symbol={symbol} />
 
       <div className="h-[360px] shrink-0">

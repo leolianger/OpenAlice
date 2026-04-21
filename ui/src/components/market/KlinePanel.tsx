@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   createChart,
   CandlestickSeries,
@@ -16,6 +17,16 @@ type Timeframe = '1D' | '5D' | '1M' | '3M' | '1Y' | '5Y' | 'All'
 
 const INTERVALS: Interval[] = ['1m', '5m', '1h', '1d']
 const TIMEFRAMES: Timeframe[] = ['1D', '5D', '1M', '3M', '1Y', '5Y', 'All']
+const DEFAULT_INTERVAL: Interval = '1d'
+const DEFAULT_RANGE: Timeframe = '1Y'
+
+function parseInterval(s: string | null): Interval {
+  return (INTERVALS as string[]).includes(s ?? '') ? (s as Interval) : DEFAULT_INTERVAL
+}
+
+function parseTimeframe(s: string | null): Timeframe {
+  return (TIMEFRAMES as string[]).includes(s ?? '') ? (s as Timeframe) : DEFAULT_RANGE
+}
 
 const INTRADAY: ReadonlySet<Interval> = new Set(['1m', '5m', '1h'])
 
@@ -48,8 +59,27 @@ interface Props {
 }
 
 export function KlinePanel({ selection }: Props) {
-  const [interval, setInterval] = useState<Interval>('1d')
-  const [tf, setTf] = useState<Timeframe>('1Y')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const interval = parseInterval(searchParams.get('interval'))
+  const tf = parseTimeframe(searchParams.get('range'))
+
+  const setInterval = (iv: Interval) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (iv === DEFAULT_INTERVAL) next.delete('interval')
+      else next.set('interval', iv)
+      return next
+    }, { replace: true })
+  }
+  const setTf = (t: Timeframe) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (t === DEFAULT_RANGE) next.delete('range')
+      else next.set('range', t)
+      return next
+    }, { replace: true })
+  }
+
   const [bars, setBars] = useState<HistoricalBar[] | null>(null)
   const [provider, setProvider] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
