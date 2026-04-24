@@ -23,6 +23,35 @@ pnpm test           # Unit tests
 
 `pnpm build` uses tsup which is lenient — `tsc --noEmit` catches strict type errors that tsup ignores.
 
+## Subsystem guides
+
+Some parts of this codebase are structured in ways that aren't obvious from
+the code alone — easy to touch superficially, easy to miss load-bearing
+wiring. When working on one of these, read its guide first:
+
+- **Event / Listener / Producer system** — [docs/event-system.md](docs/event-system.md).
+  Read before adding a new event type, Listener, or Producer, or before
+  opening an event to HTTP via the webhook ingest. Has recipes + the full
+  list of files to touch for each kind of change, plus a "common pitfalls"
+  section for the kinds of things AI sessions have historically half-done.
+
+## Working with TODO.md
+
+`TODO.md` at the repo root is the running backlog — deferred work, known
+bugs, security gaps, and design items sitting in the on-deck circle.
+Unfinished items there compound over time if they're forgotten.
+
+- **Before starting non-trivial work**, scan `TODO.md` for related entries.
+  If there's one, either (a) handle it as part of the current change, or
+  (b) confirm with the user why you're skipping it so it doesn't drift.
+- **When finishing a change**, if it resolves a TODO entry, delete that
+  entry in the same commit (git log is the history — the file is a
+  future-looking list, not an audit trail).
+- **When a new item surfaces mid-work** — a known-broken behaviour you
+  don't have scope to fix, a security concern, a half-done UI surface —
+  add it with enough context (symptom + suspected location) that the
+  next person can start without re-derivation.
+
 ## Project Structure
 
 ```

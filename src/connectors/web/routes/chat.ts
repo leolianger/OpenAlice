@@ -47,7 +47,7 @@ export function createChatRoutes({ ctx, sessions, sseByChannel }: ChatDeps) {
       }
     }
 
-    const receivedEntry = await ctx.eventLog.append('message.received', {
+    const receivedEntry = await ctx.connectorCenter.emitMessageReceived({
       channel: 'web', to: channelId, prompt: message,
     })
 
@@ -74,7 +74,7 @@ export function createChatRoutes({ ctx, sessions, sseByChannel }: ChatDeps) {
       // Stream fully drained — await resolves immediately with cached result
       const result = await stream
 
-      await ctx.eventLog.append('message.sent', {
+      await ctx.connectorCenter.emitMessageSent({
         channel: 'web', to: channelId, prompt: message,
         reply: result.text, durationMs: Date.now() - receivedEntry.ts,
       })
@@ -92,10 +92,27 @@ export function createChatRoutes({ ctx, sessions, sseByChannel }: ChatDeps) {
   app.get('/history', async (c) => {
     const limit = Number(c.req.query('limit')) || 100
     const channelId = c.req.query('channel') ?? 'default'
+    // Cursor: uuid of the oldest-loaded message on the client. Server
+    // returns the `limit` entries appearing BEFORE that uuid in session
+    // order. Omit to fetch the newest `limit` entries.
+    const before = c.req.query('before')
     const session = sessions.get(channelId)
     if (!session) return c.json({ error: 'channel not found' }, 404)
     const entries = await session.readActive()
-    return c.json({ messages: toChatHistory(entries).slice(-limit) })
+
+    // Slice off anything at/after the cursor entry (older-than-cursor only).
+    let sliced = entries
+    if (before) {
+      const cutoffIdx = entries.findIndex((e) => e.uuid === before)
+      sliced = cutoffIdx >= 0 ? entries.slice(0, cutoffIdx) : []
+    }
+
+    const window = sliced.slice(-limit)
+    const messages = toChatHistory(window)
+    // hasMore reflects raw entry reality — more entries exist older than
+    // the window even if toChatHistory merged some into fewer items.
+    const hasMore = window.length < sliced.length
+    return c.json({ messages, hasMore })
   })
 
   app.get('/events', (c) => {

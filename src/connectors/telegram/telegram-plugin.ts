@@ -16,6 +16,7 @@ import { TelegramConnector, splitMessage, MAX_MESSAGE_LENGTH } from './telegram-
 import type { AccountManager } from '../../domain/trading/index.js'
 import type { Operation } from '../../domain/trading/git/types.js'
 import { getOperationSymbol } from '../../domain/trading/git/types.js'
+import { UNSET_DECIMAL } from '@traderalice/ibkr'
 
 /** Build a display label for a profile. */
 function profileLabel(name: string, profile: { model: string }): string {
@@ -275,7 +276,7 @@ export class TelegramPlugin implements Plugin {
       if (!prompt) return
 
       // Log: message received
-      const receivedEntry = await engineCtx.eventLog.append('message.received', {
+      const receivedEntry = await engineCtx.connectorCenter.emitMessageReceived({
         channel: 'telegram',
         to: String(message.chatId),
         prompt,
@@ -295,7 +296,7 @@ export class TelegramPlugin implements Plugin {
         await this.sendReplyWithPlaceholder(message.chatId, result.text, result.media, placeholder?.message_id)
 
         // Log: message sent
-        await engineCtx.eventLog.append('message.sent', {
+        await engineCtx.connectorCenter.emitMessageSent({
           channel: 'telegram',
           to: String(message.chatId),
           prompt,
@@ -550,7 +551,9 @@ export class TelegramPlugin implements Plugin {
         const side = op.order?.action || '?'
         const qty = op.order?.totalQuantity
         const cashQty = op.order?.cashQty
-        const size = (cashQty && cashQty > 0) ? `$${cashQty}` : qty ? `${qty}` : '?'
+        const hasCash = cashQty && !cashQty.equals(UNSET_DECIMAL) && cashQty.gt(0)
+        const hasQty = qty && !qty.equals(UNSET_DECIMAL)
+        const size = hasCash ? `$${cashQty.toFixed()}` : hasQty ? qty.toFixed() : '?'
         return `${side} ${symbol} ${size}`
       }
       case 'closePosition':

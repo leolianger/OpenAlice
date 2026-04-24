@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import { api } from '../api'
 import type { ChannelListItem } from '../api/channels'
 import { useChat } from '../hooks/useChat'
@@ -17,7 +17,7 @@ export function ChatPage({ onSSEStatus }: ChatPageProps) {
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const [newMsgCount, setNewMsgCount] = useState(0)
 
-  const { messages, streamSegments, isWaiting, send, abort } = useChat({
+  const { messages, streamSegments, isWaiting, send, abort, loadMore, hasMore, isLoadingMore } = useChat({
     channel: activeChannel,
     onSSEStatus: activeChannel === 'default' ? onSSEStatus : undefined,
   })
@@ -62,19 +62,116 @@ export function ChatPage({ onSSEStatus }: ChatPageProps) {
 
   useEffect(scrollToBottom, [messages, isWaiting, streamSegments, scrollToBottom])
 
-  // Detect user scroll
+  // After a load-more prepend finishes laying out, re-anchor scrollTop to
+  // the same visual position. Without this the viewport jumps because
+  // scrollHeight grew and scrollTop stayed constant.
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const offset = preserveBottomOffsetRef.current
+    if (offset == null) return
+    preserveBottomOffsetRef.current = null
+    // If the user returned to the bottom while the fetch was in flight,
+    // let the auto-scroll-to-bottom effect handle layout instead.
+    if (!userScrolledUp.current) return
+    el.scrollTop = el.scrollHeight - offset
+  }, [messages])
+
+  // Safety: when a load-more returns empty (no new messages prepended),
+  // the useLayoutEffect above never fires, so the captured offset would
+  // otherwise linger and mis-adjust the next unrelated `messages` change.
+  useEffect(() => {
+    if (!isLoadingMore && preserveBottomOffsetRef.current != null) {
+      preserveBottomOffsetRef.current = null
+    }
+  }, [isLoadingMore])
+
+  // Track whether a load-more prepend is pending so we can compensate
+  // scrollTop once the new DOM is laid out (prevents the viewport from
+  // snapping to the old oldest item which is now hundreds of px down).
+  const preserveBottomOffsetRef = useRef<number | null>(null)
+
+  // Ref to loadMore — keeps scroll listener stable (effect re-registration
+  // every render would drop events during fast streaming).
+  const loadMoreRef = useRef(loadMore)
+  loadMoreRef.current = loadMore
+  const hasMoreRef = useRef(hasMore)
+  hasMoreRef.current = hasMore
+  const isLoadingMoreRef = useRef(isLoadingMore)
+  isLoadingMoreRef.current = isLoadingMore
+
+  // Scroll lock plumbing.
+  //
+  // The lock flag `userScrolledUp` is driven ONLY by user-intent events
+  // (wheel, touch, the explicit scroll-to-bottom button). onScroll handles
+  // cosmetic UI state only — it must not mutate the lock, otherwise during
+  // streaming the DOM scroll event races user wheel and resets the flag
+  // before the next auto-scroll tick sees the user's intent.
+  //
+  // Also: when the user scrolls near the top, request the next older page.
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
+
+    const LOAD_MORE_TRIGGER_PX = 200
+
     const onScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = el
-      const isUp = scrollHeight - scrollTop - clientHeight > 80
-      userScrolledUp.current = isUp
-      setShowScrollBtn(isUp)
-      if (!isUp) setNewMsgCount(0)
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+      setShowScrollBtn(distance > 20)
+      if (distance <= 5) setNewMsgCount(0)
+
+      // Infinite scroll up — fire when near the top and we have more,
+      // aren't already loading, and aren't sitting at scrollTop 0 with
+      // nothing above (initial empty layout).
+      if (
+        el.scrollTop < LOAD_MORE_TRIGGER_PX &&
+        hasMoreRef.current &&
+        !isLoadingMoreRef.current &&
+        el.scrollHeight > el.clientHeight
+      ) {
+        // Capture the current "distance from bottom" so that after the
+        // prepend lays out taller content, a useLayoutEffect can restore
+        // scrollTop to the equivalent visible position.
+        preserveBottomOffsetRef.current = el.scrollHeight - el.scrollTop
+        loadMoreRef.current()
+      }
     }
-    el.addEventListener('scroll', onScroll)
-    return () => el.removeEventListener('scroll', onScroll)
+
+    // After a down-direction scroll, read the post-scroll position
+    // (wheel events fire before the browser applies the delta, so we need
+    // a frame of latency to see the real scrollTop).
+    const unlockIfAtBottom = () => {
+      requestAnimationFrame(() => {
+        const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+        if (distance <= 5) userScrolledUp.current = false
+      })
+    }
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) {
+        userScrolledUp.current = true
+        setShowScrollBtn(true)
+      } else if (e.deltaY > 0) {
+        unlockIfAtBottom()
+      }
+    }
+
+    const onTouchMove = () => {
+      userScrolledUp.current = true
+      setShowScrollBtn(true)
+    }
+    const onTouchEnd = () => { unlockIfAtBottom() }
+
+    el.addEventListener('scroll', onScroll, { passive: true })
+    el.addEventListener('wheel', onWheel, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: true })
+    el.addEventListener('touchend', onTouchEnd, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('touchmove', onTouchMove)
+      el.removeEventListener('touchend', onTouchEnd)
+    }
   }, [])
 
   // Load channels list on mount
@@ -269,6 +366,12 @@ export function ChatPage({ onSSEStatus }: ChatPageProps) {
 
         {/* Scrollable messages */}
         <div ref={containerRef} className="h-full overflow-y-auto px-5 py-6">
+        {/* History load-more status — appears at the top while older pages stream in */}
+        {messages.length > 0 && (isLoadingMore || !hasMore) && (
+          <div className="text-center text-[11px] text-text-muted/50 select-none pb-3">
+            {isLoadingMore ? 'Loading older messages…' : '— beginning of history —'}
+          </div>
+        )}
         {messages.length === 0 && !isWaiting && (
           <div className="flex-1 flex flex-col items-center justify-center h-full gap-4 select-none">
             <img
