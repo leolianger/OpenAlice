@@ -136,15 +136,26 @@ export function createTradingConfigRoutes(ctx: EngineContext) {
   // ==================== Test Connection ====================
 
   app.post('/test-connection', async (c) => {
-    let broker: { init: () => Promise<void>; getAccount: () => Promise<unknown>; close: () => Promise<void> } | null = null
+    let broker: {
+      init: () => Promise<void>
+      getAccount: () => Promise<unknown>
+      getPositions: () => Promise<unknown>
+      close: () => Promise<void>
+    } | null = null
     try {
       const body = await c.req.json()
       const accountConfig = accountConfigSchema.parse({ ...body, id: body.id ?? '__test__' })
 
       broker = createBroker(accountConfig)
       await broker.init()
-      const account = await broker.getAccount()
-      return c.json({ success: true, account })
+      // Run both calls in parallel — getAccount proves auth, getPositions
+      // exercises the data path the user actually cares about (e.g. for OKX
+      // UTA, this is what surfaces spot holdings via fetchSpotHoldings).
+      const [account, positions] = await Promise.all([
+        broker.getAccount(),
+        broker.getPositions(),
+      ])
+      return c.json({ success: true, account, positions })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return c.json({ success: false, error: msg }, 400)

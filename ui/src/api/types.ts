@@ -397,7 +397,8 @@ export interface GuardEntry {
 export interface TestConnectionResult {
   success: boolean
   error?: string
-  account?: unknown
+  account?: AccountInfo
+  positions?: Position[]
 }
 
 // ==================== Snapshots ====================
