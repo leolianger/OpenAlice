@@ -25,6 +25,7 @@ import {
   type TpSlParams,
 } from '../types.js'
 import '../../contract-ext.js'
+import { buildPosition } from '../contract-builder.js'
 import { CCXT_CREDENTIAL_FIELDS, type CcxtBrokerConfig, type CcxtMarket, type FundingRate, type OrderBook, type OrderBookLevel } from './ccxt-types.js'
 import { MAX_INIT_RETRIES, INIT_RETRY_BASE_MS } from './ccxt-types.js'
 import {
@@ -326,24 +327,30 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     // type "BTC" and expect every BTC market); substring / name hits show up
     // afterward so partial keywords (e.g. "tesl", "popcorn") still surface
     // something useful.
+    // Skip CCXT markets that fail strict contract validation (typically
+    // dated FUT/OPT entries with missing expiry or multiplier in the
+    // exchange's market metadata). One bad market shouldn't drop the
+    // entire search; surface a one-line warning so the gap is visible
+    // without being noisy.
     const ranked = fuzzyRankContracts(
-      candidates.map((m) => {
-        const c = marketToContract(m, this.exchangeName)
-        return { contract: c, base: m.base, quote: m.quote, name: m.id ?? m.symbol }
+      candidates.flatMap((m) => {
+        try {
+          const c = marketToContract(m, this.exchangeName)
+          return [{ contract: c, base: m.base, quote: m.quote, name: m.id ?? m.symbol }]
+        } catch (err) {
+          console.warn(`ccxt[${this.exchangeName}]: skipping market ${m.symbol}: ${err instanceof Error ? err.message : String(err)}`)
+          return []
+        }
       }),
       pattern,
     )
 
-    // Index original markets by symbol so we can look up derivative-type
-    // metadata from each ranked hit.
-    const marketBySymbol = new Map<string, CcxtMarket>()
-    for (const m of candidates) marketBySymbol.set(m.symbol, m)
-
-    // derivativeSecTypes — surface what derivative product types appear in
-    // the result set, same shape as before.
+    // Each ranked hit's Contract carries `localSymbol = market.symbol`
+    // (CCXT's wire format), so direct `markets[localSymbol]` lookup is
+    // the join key — matches the broker's own primary index.
     const derivativeTypes = new Set<string>()
     for (const desc of ranked) {
-      const m = marketBySymbol.get(desc.contract.localSymbol ?? '')
+      const m = desc.contract.localSymbol ? this.markets[desc.contract.localSymbol] : undefined
       if (!m) continue
       if (m.type === 'future') derivativeTypes.add('FUT')
       if (m.type === 'option') derivativeTypes.add('OPT')
@@ -511,13 +518,20 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
 
     const positions = await this.getPositions()
-    const ccxtSymbol = contractToCcxt(contract, this.exchange.markets as Record<string, CcxtMarket>, this.exchangeName)
-    const symbol = contract.symbol?.toUpperCase()
+    const markets = this.exchange.markets as Record<string, CcxtMarket>
+    const ccxtSymbol = contractToCcxt(contract, markets, this.exchangeName)
 
-    const pos = positions.find(p =>
-      (ccxtSymbol && p.contract.localSymbol === ccxtSymbol) ||
-      (symbol && p.contract.symbol === symbol),
-    )
+    // Resolve both input + each position's contract to CCXT wire format.
+    // That's the unambiguous identity per exchange — works whether the input
+    // contract carries canonical localSymbol (post-Phase-3 internal flow) or
+    // wire-format localSymbol (legacy callers, user-constructed contracts).
+    const symbol = contract.symbol?.toUpperCase()
+    const pos = positions.find(p => {
+      const posWire = contractToCcxt(p.contract, markets, this.exchangeName)
+      if (ccxtSymbol && posWire === ccxtSymbol) return true
+      // Fallback for inputs we couldn't wire-resolve — match on symbol+secType.
+      return symbol && p.contract.symbol === symbol && p.contract.secType === contract.secType
+    })
 
     if (!pos) {
       return { success: false, error: `No open position for ${ccxtSymbol ?? symbol ?? 'unknown'}` }
@@ -543,9 +557,10 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
    * reflects only their stablecoin balance.
    *
    * Treated as long positions priced at the current ticker — consistent
-   * with how IBKR exposes equity holdings. avgCost is set to markPrice
-   * because reconstructing historic fill cost would require fetchMyTrades,
-   * which is too expensive for a snapshot path.
+   * with how IBKR exposes equity holdings. avgCost is filled with markPrice
+   * as a placeholder; UTA replaces it with a wallet-ledger-derived value
+   * (and bootstraps any unaccounted qty via `reconcileBalance` at observed
+   * markPrice) — the `avgCostSource: 'wallet'` flag signals this.
    */
   private async fetchSpotHoldings(prefetched?: Awaited<ReturnType<Exchange['fetchBalance']>>): Promise<Position[]> {
     const balance = prefetched ?? await this.exchange.fetchBalance()
@@ -612,18 +627,25 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       const markPrice = new Decimal(String(last))
       const marketValue = h.quantity.mul(markPrice)
 
-      result.push({
+      result.push(buildPosition({
         contract: marketToContract(h.market, this.exchangeName),
         currency: normalizeQuoteCurrency(h.market.quote ?? 'USDT'),
         side: 'long',
         quantity: h.quantity,
-        // markPrice as cost basis — historic cost would need fetchMyTrades
+        // Placeholder — UTA will replace via wallet-ledger reconstruction.
         avgCost: markPrice.toString(),
         marketPrice: markPrice.toString(),
+        // CCXT pre-computes marketValue per the spot-synthesis path; the
+        // upstream API doesn't give us PnL since we have no historical cost,
+        // so we explicitly pin both pre-computed values to avoid `buildPosition`
+        // re-deriving with avgCost=markPrice (which would yield 0 anyway).
         marketValue: marketValue.toString(),
         unrealizedPnL: '0',
         realizedPnL: '0',
-      })
+        // CCXT spot has no IBKR-style multiplier — canonical default '1'.
+        multiplier: '1',
+        avgCostSource: 'wallet',
+      }))
     }
 
     return result
@@ -723,17 +745,22 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         const marketValue = quantity.mul(markPrice)
         const unrealizedPnL = new Decimal(String(p.unrealizedPnl ?? 0))
 
-        result.push({
+        result.push(buildPosition({
           contract: marketToContract(market, this.exchangeName),
           currency: normalizeQuoteCurrency(market.quote ?? 'USDT'),
           side: p.side === 'long' ? 'long' : 'short',
           quantity,
           avgCost: entryPrice.toString(),
           marketPrice: markPrice.toString(),
+          // CCXT exchange already returns notional and PnL — pass through.
           marketValue: marketValue.toString(),
           unrealizedPnL: unrealizedPnL.toString(),
           realizedPnL: new Decimal(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0)).toString(),
-        })
+          // contracts × contractSize is folded into `quantity` upstream, so
+          // multiplier is canonical 1 here.
+          multiplier: '1',
+          avgCostSource: 'broker',
+        }))
       }
 
       // Spot holdings carry distinct contract identity (no settle suffix
@@ -822,12 +849,12 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         contract: market
           ? marketToContract(market, this.exchangeName)
           : contract,
-        last: ticker.last ?? 0,
-        bid: ticker.bid ?? 0,
-        ask: ticker.ask ?? 0,
-        volume: ticker.baseVolume ?? 0,
-        high: ticker.high ?? undefined,
-        low: ticker.low ?? undefined,
+        last: String(ticker.last ?? 0),
+        bid: String(ticker.bid ?? 0),
+        ask: String(ticker.ask ?? 0),
+        volume: String(ticker.baseVolume ?? 0),
+        high: ticker.high != null ? String(ticker.high) : undefined,
+        low: ticker.low != null ? String(ticker.low) : undefined,
         timestamp: new Date(ticker.timestamp ?? Date.now()),
       }
     } catch (err) {
@@ -839,7 +866,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
   getCapabilities(): AccountCapabilities {
     return {
-      supportedSecTypes: ['CRYPTO'],
+      supportedSecTypes: ['CRYPTO', 'CRYPTO_PERP'],
       supportedOrderTypes: ['MKT', 'LMT'],
     }
   }
@@ -858,9 +885,16 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   }
 
   resolveNativeKey(nativeKey: string): Contract {
+    // CCXT's nativeKey IS the unified wire symbol (e.g. "BTC/USDT:USDT"),
+    // which is also the markets-table key. Direct lookup is the only
+    // path needed — no normalization, no reverse-mapping.
     const market = this.markets[nativeKey]
     if (market) return marketToContract(market, this.exchange.id)
-    // Fallback: construct minimal contract from symbol string
+
+    // Last-resort skeletal contract for an unknown nativeKey. Operations
+    // that need market metadata (placeOrder / getQuote / closePosition)
+    // will fail downstream — that's the loud failure we want rather than
+    // a silent half-broken contract.
     const c = new Contract()
     c.localSymbol = nativeKey
     c.symbol = nativeKey.split('/')[0] ?? nativeKey

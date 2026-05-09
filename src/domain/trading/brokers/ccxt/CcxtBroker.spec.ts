@@ -931,6 +931,7 @@ describe('CcxtBroker — getPositions', () => {
     expect(positions[0].side).toBe('long')
     expect(positions[0].avgCost).toBe('58000')
     expect(positions[0].marketPrice).toBe('60000')
+    expect(positions[0].avgCostSource).toBe('broker')
   })
 
   it('skips zero-size positions', async () => {
@@ -1007,10 +1008,11 @@ describe('CcxtBroker — getPositions', () => {
     const btc = positions.find(p => p.contract.symbol === 'BTC')!
     expect(btc.side).toBe('long')
     expect(btc.quantity.toString()).toBe('0.5')
-    expect(btc.avgCost).toBe('60000')        // markPrice as cost basis
+    expect(btc.avgCost).toBe('60000')        // markPrice placeholder; UTA replaces via wallet ledger
     expect(btc.marketValue).toBe('30000')
     expect(btc.unrealizedPnL).toBe('0')
-    expect(btc.contract.localSymbol).toBe('BTC/USDT')  // spot, no settle suffix
+    expect(btc.contract.localSymbol).toBe('BTC/USDT')   // CCXT wire format (broker-native uniqueness)
+    expect(btc.avgCostSource).toBe('wallet')           // signals UTA to reconstruct cost
   })
 
   it('combines free + used into spot quantity', async () => {
@@ -1109,6 +1111,8 @@ describe('CcxtBroker — getPositions', () => {
     const positions = await acc.getPositions()
     expect(positions).toHaveLength(2)
     // Distinct contract identities — same underlying, different products.
+    // CCXT wire format encodes the distinction directly (`:settle` suffix
+    // separates spot from perp, also USDC-margined from USDT-margined).
     const localSymbols = positions.map(p => p.contract.localSymbol)
     expect(localSymbols).toContain('BTC/USDT')        // spot
     expect(localSymbols).toContain('BTC/USDT:USDT')   // perp
@@ -1192,12 +1196,12 @@ describe('CcxtBroker — getQuote', () => {
     contract.localSymbol = 'BTC/USDT:USDT'
 
     const quote = await acc.getQuote(contract)
-    expect(quote.last).toBe(60000)
-    expect(quote.bid).toBe(59990)
-    expect(quote.ask).toBe(60010)
-    expect(quote.volume).toBe(1234.5)
-    expect(quote.high).toBe(61000)
-    expect(quote.low).toBe(59000)
+    expect(quote.last).toBe('60000')
+    expect(quote.bid).toBe('59990')
+    expect(quote.ask).toBe('60010')
+    expect(quote.volume).toBe('1234.5')
+    expect(quote.high).toBe('61000')
+    expect(quote.low).toBe('59000')
     expect(quote.timestamp).toEqual(new Date(now))
   })
 
@@ -1232,10 +1236,10 @@ describe('CcxtBroker — getMarketClock', () => {
 // ==================== getCapabilities ====================
 
 describe('CcxtBroker — getCapabilities', () => {
-  it('returns CRYPTO secType and MKT/LMT order types', () => {
+  it('returns CRYPTO + CRYPTO_PERP secTypes and MKT/LMT order types', () => {
     const acc = makeAccount()
     const caps = acc.getCapabilities()
-    expect(caps.supportedSecTypes).toEqual(['CRYPTO'])
+    expect(caps.supportedSecTypes).toEqual(['CRYPTO', 'CRYPTO_PERP'])
     expect(caps.supportedOrderTypes).toEqual(['MKT', 'LMT'])
   })
 })

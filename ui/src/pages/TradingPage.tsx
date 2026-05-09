@@ -1,42 +1,128 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Section, Field, inputClass } from '../components/form'
-import { Toggle } from '../components/Toggle'
-import { GuardsSection, CRYPTO_GUARD_TYPES, SECURITIES_GUARD_TYPES } from '../components/guards'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Field, inputClass } from '../components/form'
 import { SDKSelector } from '../components/SDKSelector'
 import type { SDKOption } from '../components/SDKSelector'
-import { ReconnectButton } from '../components/ReconnectButton'
 import { useTradingConfig } from '../hooks/useTradingConfig'
 import { useAccountHealth } from '../hooks/useAccountHealth'
-import { useSchemaForm, type SchemaField } from '../hooks/useSchemaForm'
+import { useSchemaForm } from '../hooks/useSchemaForm'
 import { PageHeader } from '../components/PageHeader'
+import { Dialog } from '../components/uta/Dialog'
+import { HealthBadge } from '../components/uta/HealthBadge'
+import { SchemaFormFields } from '../components/uta/SchemaFormFields'
+import { Metric, signFromDelta } from '../components/Metric'
+import { Sparkline } from '../components/Sparkline'
+import { fmt, fmtPnl, fmtPctSigned } from '../lib/format'
 import { api } from '../api'
-import type { AccountConfig, BrokerPreset, BrokerHealthInfo, SubtitleField, TestConnectionResult } from '../api/types'
+import type { UTAConfig, BrokerPreset, BrokerHealthInfo, TestConnectionResult, Position, AccountInfo, EquityCurvePoint } from '../api/types'
 
-// ==================== Dialog state ====================
+// ==================== Live equity (across all UTAs) ====================
 
-type DialogState =
-  | { kind: 'edit'; accountId: string }
-  | { kind: 'add' }
-  | null
+interface EquitySummary {
+  totalEquity: string
+  totalCash: string
+  totalUnrealizedPnL: string
+  totalRealizedPnL: string
+  accounts: Array<{ id: string; label: string; equity: string; cash: string }>
+}
+
+interface PerUtaCurve { values: number[]; firstAtCutoff: number | null; latest: number | null }
+
+interface CurveSummary {
+  /** Aggregate (across all UTAs) — feeds the hero banner. */
+  total: { values: number[]; firstAtCutoff: number | null; latest: number | null }
+  /** Per-UTA curves — feed the per-card sparkline + 24h delta. */
+  perUta: Record<string, PerUtaCurve>
+}
+
+const CUTOFF_24H_MS = 24 * 60 * 60 * 1000
+
+/** Build a curve summary from equity-curve points: latest value + the
+ *  oldest value still within the trailing 24h window (the "baseline"
+ *  for today PnL). */
+function summarizeCurve(points: EquityCurvePoint[]): CurveSummary {
+  const sorted = [...points].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+  const cutoff = Date.now() - CUTOFF_24H_MS
+
+  const totalValues: number[] = []
+  let totalFirstAtCutoff: number | null = null
+  let totalLatest: number | null = null
+  const perUtaValues = new Map<string, number[]>()
+  const perUtaFirstAtCutoff = new Map<string, number>()
+  const perUtaLatest = new Map<string, number>()
+
+  for (const p of sorted) {
+    const t = new Date(p.timestamp).getTime()
+    const totalN = Number(p.equity)
+    if (Number.isFinite(totalN)) {
+      totalValues.push(totalN)
+      totalLatest = totalN
+      if (t >= cutoff && totalFirstAtCutoff == null) totalFirstAtCutoff = totalN
+    }
+    for (const [id, raw] of Object.entries(p.accounts ?? {})) {
+      const n = Number(raw)
+      if (!Number.isFinite(n)) continue
+      let arr = perUtaValues.get(id)
+      if (!arr) { arr = []; perUtaValues.set(id, arr) }
+      arr.push(n)
+      perUtaLatest.set(id, n)
+      if (t >= cutoff && !perUtaFirstAtCutoff.has(id)) perUtaFirstAtCutoff.set(id, n)
+    }
+  }
+
+  const perUta: Record<string, PerUtaCurve> = {}
+  for (const [id, values] of perUtaValues) {
+    perUta[id] = {
+      values,
+      firstAtCutoff: perUtaFirstAtCutoff.get(id) ?? null,
+      latest: perUtaLatest.get(id) ?? null,
+    }
+  }
+
+  return {
+    total: { values: totalValues, firstAtCutoff: totalFirstAtCutoff, latest: totalLatest },
+    perUta,
+  }
+}
 
 // ==================== Page ====================
 
 export function TradingPage() {
   const tc = useTradingConfig()
   const healthMap = useAccountHealth()
-  const [dialog, setDialog] = useState<DialogState>(null)
+  const navigate = useNavigate()
+  const [showAdd, setShowAdd] = useState(false)
   const [presets, setPresets] = useState<BrokerPreset[]>([])
+  const [equity, setEquity] = useState<EquitySummary | null>(null)
+  const [curve, setCurve] = useState<CurveSummary | null>(null)
 
-  // Fetch broker preset metadata on mount
   useEffect(() => {
     api.trading.getBrokerPresets().then(r => setPresets(r.presets)).catch(() => {})
   }, [])
 
-  useEffect(() => {
-    if (dialog?.kind === 'edit') {
-      if (!tc.accounts.some((a) => a.id === dialog.accountId)) setDialog(null)
+  // Live aggregates: pull `equity()` for headline numbers and `equityCurve()`
+  // for trend + 24h delta. One fetch each per cycle, shared across the
+  // hero banner + every UTA card. Polling cadence (30s) is informational —
+  // user can drill into a UTA for the 15s refresh of broker state.
+  const refreshAggregates = useCallback(async () => {
+    try {
+      const [eq, cv] = await Promise.all([
+        api.trading.equity().catch(() => null),
+        api.trading.equityCurve({ limit: 1500 }).catch(() => ({ points: [] as EquityCurvePoint[] })),
+      ])
+      if (eq) setEquity(eq)
+      setCurve(summarizeCurve(cv.points))
+    } catch {
+      // Don't surface — aggregates are nice-to-have, the page still renders
+      // from useTradingConfig if the equity endpoint is down.
     }
-  }, [tc.accounts, dialog])
+  }, [])
+
+  useEffect(() => {
+    refreshAggregates()
+    const id = setInterval(refreshAggregates, 30_000)
+    return () => clearInterval(id)
+  }, [refreshAggregates])
 
   if (tc.loading) return <PageShell subtitle="Loading..." />
   if (tc.error) {
@@ -48,73 +134,66 @@ export function TradingPage() {
     )
   }
 
-  const deleteAccount = async (accountId: string) => {
-    await tc.deleteAccount(accountId)
-    setDialog(null)
-  }
-
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <PageHeader title="Trading" description="Configure your trading accounts." />
+      <PageHeader title="Trading" description="Configure your UTAs (Unified Trading Accounts)." />
 
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
-        <div className="max-w-[720px] space-y-3">
-          {tc.accounts.length === 0 ? (
-            <EmptyState onAdd={() => setDialog({ kind: 'add' })} />
+        <div className="max-w-[820px] mx-auto space-y-4">
+          {tc.utas.length === 0 ? (
+            <EmptyState onAdd={() => setShowAdd(true)} />
           ) : (
             <>
-              {tc.accounts.map((account) => (
-                <AccountCard
-                  key={account.id}
-                  account={account}
-                  preset={presets.find(p => p.id === account.presetId)}
-                  health={healthMap[account.id]}
-                  onClick={() => setDialog({ kind: 'edit', accountId: account.id })}
-                />
-              ))}
-              <button
-                onClick={() => setDialog({ kind: 'add' })}
-                className="w-full py-2.5 text-[12px] text-text-muted hover:text-text border border-dashed border-border hover:border-text-muted/40 rounded-lg transition-colors"
-              >
-                + Add Account
-              </button>
+              {equity && <PortfolioBanner equity={equity} curve={curve?.total ?? null} />}
+
+              <div className="space-y-2.5">
+                {tc.utas.map((uta) => {
+                  const equityRow = equity?.accounts.find(a => a.id === uta.id) ?? null
+                  return (
+                    <UTACard
+                      key={uta.id}
+                      uta={uta}
+                      preset={presets.find(p => p.id === uta.presetId)}
+                      health={healthMap[uta.id]}
+                      equity={equityRow}
+                      curve={curve?.perUta[uta.id] ?? null}
+                      onClick={() => navigate(`/uta/${uta.id}`)}
+                    />
+                  )
+                })}
+                <button
+                  onClick={() => setShowAdd(true)}
+                  className="w-full py-2.5 text-[12px] text-text-muted hover:text-text border border-dashed border-border hover:border-text-muted/40 rounded-lg transition-colors"
+                >
+                  + Add UTA
+                </button>
+              </div>
             </>
           )}
         </div>
       </div>
 
-      {/* Create Wizard */}
-      {dialog?.kind === 'add' && (
+      {showAdd && (
         <CreateWizard
           presets={presets}
-          existingAccountIds={tc.accounts.map((a) => a.id)}
-          onSave={async (account) => {
-            await tc.saveAccount(account)
-            const result = await tc.reconnectAccount(account.id)
+          onSave={async (uta) => {
+            const created = await tc.createUTA(uta)
+            const result = await tc.reconnectUTA(created.id)
             if (!result.success) {
               throw new Error(result.error || 'Connection failed')
             }
-            setDialog(null)
+            setShowAdd(false)
+            // Trigger a fresh fetch so the new UTA shows live numbers right away.
+            void refreshAggregates()
+            return created
           }}
-          onClose={() => setDialog(null)}
+          onOpenExisting={(id) => {
+            setShowAdd(false)
+            navigate(`/uta/${id}`)
+          }}
+          onClose={() => setShowAdd(false)}
         />
       )}
-
-      {/* Edit Dialog */}
-      {dialog?.kind === 'edit' && (() => {
-        const account = tc.accounts.find((a) => a.id === dialog.accountId)
-        if (!account) return null
-        return (
-          <EditDialog
-            account={account}
-            preset={presets.find(p => p.id === account.presetId)}
-            health={healthMap[account.id]}
-            onSaveAccount={tc.saveAccount}
-            onDelete={() => deleteAccount(account.id)}
-            onClose={() => setDialog(null)}
-          />
-        )
-      })()}
     </div>
   )
 }
@@ -135,90 +214,66 @@ function PageShell({ subtitle, children }: { subtitle: string; children?: React.
 function EmptyState({ onAdd }: { onAdd: () => void }) {
   return (
     <div className="rounded-xl border border-dashed border-border p-12 text-center">
-      <h3 className="text-[16px] font-semibold text-text mb-2">No trading accounts</h3>
+      <h3 className="text-[16px] font-semibold text-text mb-2">No UTAs configured</h3>
       <p className="text-[13px] text-text-muted mb-6 max-w-[320px] mx-auto leading-relaxed">
-        Connect a crypto exchange or brokerage account to start automated trading.
+        Connect a crypto exchange or brokerage to start automated trading.
       </p>
       <button onClick={onAdd} className="btn-primary">
-        + Add Account
+        + Add UTA
       </button>
     </div>
   )
 }
 
-// ==================== Dialog ====================
+// ==================== Portfolio banner (hero) ====================
 
-function Dialog({ onClose, width, children }: {
-  onClose: () => void
-  width?: string
-  children: React.ReactNode
+function PortfolioBanner({ equity, curve }: {
+  equity: EquitySummary
+  curve: { values: number[]; firstAtCutoff: number | null; latest: number | null } | null
 }) {
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === 'Escape') onClose()
-  }, [onClose])
+  const total = Number(equity.totalEquity)
+  const cash = Number(equity.totalCash)
+  const unrealized = Number(equity.totalUnrealizedPnL)
 
-  useEffect(() => {
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [handleKeyDown])
+  // 24h delta from the curve summary. If curve is empty or the cutoff
+  // baseline isn't available (UTA freshly added), suppress the delta.
+  let deltaNode: React.ReactNode = null
+  if (curve && curve.latest != null && curve.firstAtCutoff != null) {
+    const delta = curve.latest - curve.firstAtCutoff
+    const pct = curve.firstAtCutoff !== 0 ? (delta / curve.firstAtCutoff) * 100 : 0
+    const sign = signFromDelta(delta)
+    const arrow = sign === 'up' ? '▲' : sign === 'down' ? '▼' : '·'
+    const color = sign === 'up' ? 'text-green' : sign === 'down' ? 'text-red' : 'text-text-muted'
+    deltaNode = (
+      <span className={`text-[14px] tabular-nums ${color}`}>
+        {arrow} {fmtPnl(delta, 'USD')} ({fmtPctSigned(pct)}) today
+      </span>
+    )
+  }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className={`relative ${width || 'w-[560px]'} max-w-[95vw] max-h-[85vh] bg-bg rounded-xl border border-border shadow-2xl flex flex-col overflow-hidden`}>
-        {children}
+    <div className="rounded-lg border border-border bg-bg-secondary px-5 py-4">
+      <p className="text-[11px] text-text-muted uppercase tracking-wide mb-1">Total Portfolio · USD</p>
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <span className="text-[26px] md:text-[30px] font-bold tabular-nums text-text">
+          {fmt(total, 'USD')}
+        </span>
+        {deltaNode}
+      </div>
+      <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-text-muted">
+        <span>Cash <span className="text-text tabular-nums">{fmt(cash, 'USD')}</span></span>
+        <span className="text-text-muted/40">·</span>
+        <span>Unrealized <span className={`tabular-nums ${unrealized >= 0 ? 'text-green' : 'text-red'}`}>{fmtPnl(unrealized, 'USD')}</span></span>
       </div>
     </div>
   )
 }
 
-// ==================== Health Badge ====================
-
-function HealthBadge({ health, size = 'sm' }: { health?: BrokerHealthInfo; size?: 'sm' | 'md' }) {
-  const textSize = size === 'md' ? 'text-[12px]' : 'text-[11px]'
-  const dotSize = size === 'md' ? 'w-2 h-2' : 'w-1.5 h-1.5'
-
-  if (!health) return <span className="text-text-muted/40">—</span>
-
-  if (health.disabled) {
-    return (
-      <span className={`inline-flex items-center gap-1.5 ${textSize} text-text-muted`} title={health.lastError}>
-        <span className={`${dotSize} rounded-full bg-text-muted/40 shrink-0`} />
-        Disabled
-      </span>
-    )
-  }
-
-  switch (health.status) {
-    case 'healthy':
-      return (
-        <span className={`inline-flex items-center gap-1.5 ${textSize} text-green`}>
-          <span className={`${dotSize} rounded-full bg-green shrink-0`} />
-          Connected
-        </span>
-      )
-    case 'degraded':
-      return (
-        <span className={`inline-flex items-center gap-1.5 ${textSize} text-yellow-400`}>
-          <span className={`${dotSize} rounded-full bg-yellow-400 shrink-0`} />
-          Unstable
-        </span>
-      )
-    case 'offline':
-      return (
-        <span className={`inline-flex items-center gap-1.5 ${textSize} text-red`} title={health.lastError}>
-          <span className={`${dotSize} rounded-full bg-red shrink-0 animate-pulse`} />
-          {health.recovering ? 'Reconnecting...' : 'Offline'}
-        </span>
-      )
-  }
-}
-
 // ==================== Subtitle builder ====================
 
-function buildSubtitle(account: AccountConfig, preset?: BrokerPreset): string {
-  if (!preset) return account.presetId
-  const pc = account.presetConfig
+function buildSubtitle(uta: UTAConfig, preset?: BrokerPreset): string {
+  if (!preset) return uta.presetId
+  const pc = uta.presetConfig
   const parts: string[] = []
   for (const sf of preset.subtitleFields) {
     const val = pc[sf.field]
@@ -226,7 +281,6 @@ function buildSubtitle(account: AccountConfig, preset?: BrokerPreset): string {
       if (val && sf.label) parts.push(sf.label)
       else if (!val && sf.falseLabel) parts.push(sf.falseLabel)
     } else if (val != null && val !== '') {
-      // For mode field, prefer the human-readable label from preset.modes
       let display = String(val)
       if (sf.field === 'mode' && preset.modes) {
         const mode = preset.modes.find(m => m.id === val)
@@ -238,105 +292,91 @@ function buildSubtitle(account: AccountConfig, preset?: BrokerPreset): string {
   return parts.join(' · ') || preset.label
 }
 
-// ==================== Account Card ====================
+// ==================== UTA Card ====================
 
-function AccountCard({ account, preset, health, onClick }: {
-  account: AccountConfig
+function UTACard({ uta, preset, health, equity, curve, onClick }: {
+  uta: UTAConfig
   preset?: BrokerPreset
   health?: BrokerHealthInfo
+  equity?: { equity: string; cash: string } | null
+  curve?: PerUtaCurve | null
   onClick: () => void
 }) {
-  const isDisabled = health?.disabled || account.enabled === false
+  const isDisabled = health?.disabled || uta.enabled === false
   const badge = preset
     ? { text: preset.badge, color: `${preset.badgeColor} ${preset.badgeColor.replace('text-', 'bg-')}/10` }
-    : { text: account.presetId.slice(0, 2).toUpperCase(), color: 'text-text-muted bg-text-muted/10' }
+    : { text: uta.presetId.slice(0, 2).toUpperCase(), color: 'text-text-muted bg-text-muted/10' }
+
+  // 24h delta for this UTA.
+  const delta = curve && curve.latest != null && curve.firstAtCutoff != null
+    ? { value: curve.latest - curve.firstAtCutoff, pct: curve.firstAtCutoff !== 0 ? ((curve.latest - curve.firstAtCutoff) / curve.firstAtCutoff) * 100 : 0 }
+    : null
+
+  const sparkValues = curve?.values ?? []
+  const showSpark = !isDisabled && sparkValues.length >= 2
+
+  const equityNum = equity ? Number(equity.equity) : null
+  const cashNum = equity ? Number(equity.cash) : null
 
   return (
     <button
       onClick={onClick}
-      className={`w-full text-left rounded-lg border border-border px-4 py-3.5 transition-all hover:border-text-muted/40 hover:bg-bg-tertiary/20 ${isDisabled ? 'opacity-50' : ''}`}
+      className={`w-full text-left rounded-lg border border-border bg-bg-secondary/30 px-4 py-3.5 transition-all hover:border-text-muted/40 hover:bg-bg-tertiary/20 ${isDisabled ? 'opacity-50' : ''}`}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 mb-2.5">
         <span className={`text-[10px] font-bold px-2 py-1 rounded-md shrink-0 ${badge.color}`}>
           {badge.text}
         </span>
         <div className="flex-1 min-w-0">
-          <div className="text-[13px] font-medium text-text truncate">{account.id}</div>
-          <div className="text-[11px] text-text-muted truncate mt-0.5">
-            {buildSubtitle(account, preset)}
-            {account.guards.length > 0 && <span className="ml-2 text-text-muted/50">{account.guards.length} guard{account.guards.length > 1 ? 's' : ''}</span>}
+          <div className="text-[13px] font-medium text-text truncate">{uta.label || uta.id}</div>
+          <div className="text-[11px] text-text-muted truncate mt-0.5 font-mono">
+            {uta.id}
+            <span className="mx-1.5 text-text-muted/40">·</span>
+            {buildSubtitle(uta, preset)}
+            {uta.guards.length > 0 && <span className="ml-1.5 text-text-muted/50">{uta.guards.length} guard{uta.guards.length > 1 ? 's' : ''}</span>}
           </div>
         </div>
         <div className="shrink-0">
-          {account.enabled === false
+          {uta.enabled === false
             ? <span className="text-[11px] text-text-muted">Disabled</span>
             : <HealthBadge health={health} />
           }
         </div>
       </div>
+
+      <div className="flex items-end justify-between gap-3">
+        <div className="min-w-0">
+          {equityNum != null && Number.isFinite(equityNum) ? (
+            <p className="text-[22px] font-bold tabular-nums text-text leading-tight">
+              {fmt(equityNum, 'USD')}
+            </p>
+          ) : (
+            <p className="text-[16px] text-text-muted/70 italic">live data unavailable</p>
+          )}
+          {delta && (
+            <p className={`text-[12px] tabular-nums mt-0.5 ${delta.value >= 0 ? 'text-green' : 'text-red'}`}>
+              {delta.value >= 0 ? '▲' : '▼'} {fmtPnl(delta.value, 'USD')} ({fmtPctSigned(delta.pct)}) today
+            </p>
+          )}
+          {cashNum != null && Number.isFinite(cashNum) && (
+            <p className="text-[11px] text-text-muted mt-1">
+              Cash <span className="text-text-muted tabular-nums">{fmt(cashNum, 'USD')}</span>
+            </p>
+          )}
+        </div>
+        {showSpark && (
+          <div className="hidden md:block shrink-0">
+            <Sparkline values={sparkValues} width={120} height={42} color="auto" />
+          </div>
+        )}
+      </div>
     </button>
-  )
-}
-
-// ==================== Schema-driven form fields ====================
-
-function SchemaFormFields({ fields, formData, setField, showSecrets }: {
-  fields: SchemaField[]
-  formData: Record<string, string>
-  setField: (key: string, value: string) => void
-  showSecrets: boolean
-}) {
-  return (
-    <div className="space-y-3">
-      {fields.map(f => {
-        const value = formData[f.key] ?? f.defaultValue ?? ''
-        switch (f.type) {
-          case 'select':
-            return (
-              <Field key={f.key} label={f.title}>
-                <select className={inputClass} value={value} onChange={(e) => setField(f.key, e.target.value)}>
-                  {f.options?.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-                {f.description && <p className="text-[11px] text-text-muted/60 mt-1">{f.description}</p>}
-              </Field>
-            )
-          case 'password':
-            return (
-              <Field key={f.key} label={f.title}>
-                <input
-                  className={inputClass}
-                  type={showSecrets ? 'text' : 'password'}
-                  value={value}
-                  onChange={(e) => setField(f.key, e.target.value)}
-                  placeholder={f.required ? 'Required' : ''}
-                />
-                {f.description && <p className="text-[11px] text-text-muted/60 mt-1">{f.description}</p>}
-              </Field>
-            )
-          case 'text':
-          default:
-            return (
-              <Field key={f.key} label={f.title}>
-                <input
-                  className={inputClass}
-                  type="text"
-                  value={value}
-                  onChange={(e) => setField(f.key, e.target.value)}
-                  placeholder={f.required ? 'Required' : ''}
-                />
-                {f.description && <p className="text-[11px] text-text-muted/60 mt-1">{f.description}</p>}
-              </Field>
-            )
-        }
-      })}
-    </div>
   )
 }
 
 // ==================== Hint renderer (markdown-lite) ====================
 
 function HintBlock({ text }: { text: string }) {
-  // Very simple **bold** + paragraph rendering. Splits paragraphs on \n\n.
   return (
     <div className="rounded-md border border-border bg-bg-secondary/50 px-3 py-2.5 space-y-2">
       {text.trim().split('\n\n').map((para, i) => (
@@ -354,42 +394,67 @@ function HintBlock({ text }: { text: string }) {
 
 // ==================== Create Wizard (multi-step) ====================
 
+function PickerSectionHeader({ title }: { title: string }) {
+  return (
+    <p className="text-[11px] font-medium text-text-muted uppercase tracking-wide">
+      {title}
+    </p>
+  )
+}
+
 type WizardStep = 'pick' | 'config' | 'test'
 
-function CreateWizard({ presets, existingAccountIds, onSave, onClose }: {
+interface BrokerConflict {
+  existing: { id: string; label: string; presetId: string }
+}
+
+function CreateWizard({ presets, onSave, onOpenExisting, onClose }: {
   presets: BrokerPreset[]
-  existingAccountIds: string[]
-  onSave: (account: AccountConfig) => Promise<void>
+  onSave: (uta: Omit<UTAConfig, 'id'>) => Promise<UTAConfig>
+  onOpenExisting: (id: string) => void
   onClose: () => void
 }) {
   const [step, setStep] = useState<WizardStep>('pick')
   const [presetId, setPresetId] = useState<string | null>(null)
-  const [id, setId] = useState('')
+  const [name, setName] = useState('')
   const [showSecrets, setShowSecrets] = useState(false)
   const [testing, setTesting] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [conflict, setConflict] = useState<BrokerConflict | null>(null)
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null)
 
   const preset = presets.find(p => p.id === presetId)
   const hasSensitive = preset?.schema && Object.values((preset.schema as { properties?: Record<string, { writeOnly?: boolean }> }).properties ?? {}).some(p => p.writeOnly)
   const { fields, formData, setField, getSubmitData, validate } = useSchemaForm(preset?.schema)
 
-  const defaultId = preset?.defaultName ?? ''
-  const finalId = id.trim() || defaultId
+  const defaultName = preset?.defaultName ?? ''
+  const finalName = name.trim() || defaultName
 
-  const platformOptions: SDKOption[] = useMemo(() => presets.map(p => ({
+  const toOption = (p: BrokerPreset): SDKOption => ({
     id: p.id,
     name: p.label,
     description: p.description,
     badge: p.badge,
     badgeColor: p.badgeColor,
-  })), [presets])
+  })
 
-  const buildAccount = (): AccountConfig | null => {
+  // 'testing' category presets (Simulator) are intentionally excluded — their
+  // creation entry lives in Dev → Simulator so users picking a real broker
+  // here don't see "Simulator" alongside Bybit / Alpaca / IBKR.
+  const recommendedOptions: SDKOption[] = useMemo(
+    () => presets.filter(p => p.category === 'recommended').map(toOption),
+    [presets],
+  )
+  const cryptoOptions: SDKOption[] = useMemo(
+    () => presets.filter(p => p.category === 'crypto').map(toOption),
+    [presets],
+  )
+
+  const buildUTA = (): Omit<UTAConfig, 'id'> | null => {
     if (!preset) return null
     return {
-      id: finalId,
+      label: finalName,
       presetId: preset.id,
       enabled: true,
       guards: [],
@@ -406,20 +471,17 @@ function CreateWizard({ presets, existingAccountIds, onSave, onClose }: {
   const handleTest = async () => {
     if (!preset) return
     setError('')
-    if (existingAccountIds.includes(finalId)) {
-      setError(`Account "${finalId}" already exists`)
-      return
-    }
+    setConflict(null)
     const validationError = validate()
     if (validationError) {
       setError(validationError)
       return
     }
-    const account = buildAccount()
-    if (!account) return
+    const uta = buildUTA()
+    if (!uta) return
     setTesting(true)
     try {
-      const result = await api.trading.testConnection(account)
+      const result = await api.trading.testConnection(uta)
       setTestResult(result)
       setStep('test')
     } catch (err) {
@@ -431,26 +493,34 @@ function CreateWizard({ presets, existingAccountIds, onSave, onClose }: {
   }
 
   const handleSave = async () => {
-    const account = buildAccount()
-    if (!account) return
-    setSaving(true); setError('')
+    const uta = buildUTA()
+    if (!uta) return
+    setSaving(true); setError(''); setConflict(null)
     try {
-      await onSave(account)
+      await onSave(uta)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save account')
+      // Surface 409 collision info (typed as BrokerAlreadyExistsError) so
+      // the user can jump to the existing UTA instead of forking.
+      if (err instanceof Error && err.name === 'BrokerAlreadyExistsError') {
+        const existing = (err as Error & { existing?: BrokerConflict['existing'] }).existing
+        if (existing) {
+          setConflict({ existing })
+          setSaving(false)
+          return
+        }
+      }
+      setError(err instanceof Error ? err.message : 'Failed to save UTA')
       setSaving(false)
     }
   }
 
-  // Header text mirrors current step so the user always knows where they are.
   const headerLabel =
-    step === 'pick'   ? 'New Account · Pick Platform' :
-    step === 'config' ? `New Account · Configure ${preset?.label ?? ''}` :
-                        `New Account · Test ${preset?.label ?? ''}`
+    step === 'pick'   ? 'New UTA · Pick Platform' :
+    step === 'config' ? `New UTA · Configure ${preset?.label ?? ''}` :
+                        `New UTA · Test ${preset?.label ?? ''}`
 
   return (
     <Dialog onClose={onClose}>
-      {/* Header */}
       <div className="shrink-0 px-6 py-4 border-b border-border flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0">
           <h3 className="text-[14px] font-semibold text-text truncate">{headerLabel}</h3>
@@ -463,18 +533,30 @@ function CreateWizard({ presets, existingAccountIds, onSave, onClose }: {
         </button>
       </div>
 
-      {/* Body */}
       <div className="flex-1 overflow-y-auto px-6 py-6">
         {step === 'pick' && (
-          <SDKSelector options={platformOptions} selected={presetId ?? ''} onSelect={handlePick} />
+          <div className="space-y-6">
+            {recommendedOptions.length > 0 && (
+              <section className="space-y-3">
+                <PickerSectionHeader title="Recommended" />
+                <SDKSelector options={recommendedOptions} selected={presetId ?? ''} onSelect={handlePick} />
+              </section>
+            )}
+            {cryptoOptions.length > 0 && (
+              <section className="space-y-3">
+                <PickerSectionHeader title="Crypto" />
+                <SDKSelector options={cryptoOptions} selected={presetId ?? ''} onSelect={handlePick} />
+              </section>
+            )}
+          </div>
         )}
 
         {step === 'config' && preset && (
           <div className="space-y-5">
             {preset.hint && <HintBlock text={preset.hint} />}
             <div className="space-y-3">
-              <Field label="Account ID">
-                <input className={inputClass} value={id} onChange={(e) => setId(e.target.value.trim())} placeholder={defaultId} />
+              <Field label="Name" description="Display label for this account. The unique id is derived automatically from the credentials below.">
+                <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder={defaultName} />
               </Field>
               <SchemaFormFields
                 fields={fields}
@@ -495,12 +577,15 @@ function CreateWizard({ presets, existingAccountIds, onSave, onClose }: {
           </div>
         )}
 
-        {step === 'test' && testResult && (
-          <TestResultPanel result={testResult} accountId={finalId} />
+        {step === 'test' && testResult && !conflict && (
+          <TestResultPanel result={testResult} utaId={finalName} />
+        )}
+
+        {step === 'test' && conflict && (
+          <BrokerConflictPanel existing={conflict.existing} onOpenExisting={() => onOpenExisting(conflict.existing.id)} />
         )}
       </div>
 
-      {/* Footer */}
       <div className="shrink-0 flex items-center justify-between px-6 py-4 border-t border-border">
         {step === 'pick' && (
           <>
@@ -519,9 +604,13 @@ function CreateWizard({ presets, existingAccountIds, onSave, onClose }: {
         {step === 'test' && (
           <>
             <button onClick={() => setStep('config')} className="btn-secondary">← Back</button>
-            {testResult?.success ? (
+            {conflict ? (
+              <button onClick={() => onOpenExisting(conflict.existing.id)} className="btn-primary">
+                Open existing
+              </button>
+            ) : testResult?.success ? (
               <button onClick={handleSave} disabled={saving} className="btn-primary">
-                {saving ? 'Saving...' : 'Save Account'}
+                {saving ? 'Saving...' : 'Save UTA'}
               </button>
             ) : (
               <span className="text-[11px] text-text-muted">Fix the config and try again</span>
@@ -551,7 +640,35 @@ function StepDots({ current }: { current: WizardStep }) {
   )
 }
 
-function TestResultPanel({ result, accountId }: { result: TestConnectionResult; accountId: string }) {
+function BrokerConflictPanel({ existing, onOpenExisting }: {
+  existing: { id: string; label: string; presetId: string }
+  onOpenExisting: () => void
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="w-2 h-2 rounded-full bg-yellow-400 shrink-0" />
+        <span className="text-[13px] font-medium text-text">Broker already configured</span>
+      </div>
+      <div className="rounded-md border border-yellow-400/30 bg-yellow-400/5 px-3 py-2.5">
+        <p className="text-[12px] text-text leading-relaxed">
+          Another UTA already exists for this broker (same identity-defining credentials).
+          Re-using the same key from a separate account would double-count its positions in
+          aggregate views.
+        </p>
+        <p className="text-[12px] text-text-muted leading-relaxed mt-2">
+          Existing: <strong className="text-text">{existing.label}</strong> <span className="font-mono text-text-muted/70">({existing.id})</span>
+        </p>
+      </div>
+      <p className="text-[11px] text-text-muted">
+        Click <strong className="text-text">Open existing</strong> to use it, or <strong className="text-text">← Back</strong> to point this UTA at a different account.
+      </p>
+      <button onClick={onOpenExisting} className="btn-secondary w-full">Open existing UTA</button>
+    </div>
+  )
+}
+
+function TestResultPanel({ result, utaId }: { result: TestConnectionResult; utaId: string }) {
   if (!result.success) {
     return (
       <div className="space-y-3">
@@ -569,8 +686,8 @@ function TestResultPanel({ result, accountId }: { result: TestConnectionResult; 
     )
   }
 
-  const acct = result.account
-  const positions = result.positions ?? []
+  const acct: AccountInfo | undefined = result.account
+  const positions: Position[] = result.positions ?? []
   const visiblePositions = positions.slice(0, 8)
   const moreCount = positions.length - visiblePositions.length
 
@@ -578,7 +695,7 @@ function TestResultPanel({ result, accountId }: { result: TestConnectionResult; 
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <span className="w-2 h-2 rounded-full bg-green shrink-0" />
-        <span className="text-[13px] font-medium text-green">Connected as {accountId}</span>
+        <span className="text-[13px] font-medium text-green">Connected as {utaId}</span>
       </div>
 
       {acct && (
@@ -639,180 +756,3 @@ function TestResultPanel({ result, accountId }: { result: TestConnectionResult; 
     </div>
   )
 }
-
-// ==================== Edit Dialog ====================
-
-function EditDialog({ account, preset, health, onSaveAccount, onDelete, onClose }: {
-  account: AccountConfig
-  preset?: BrokerPreset
-  health?: BrokerHealthInfo
-  onSaveAccount: (a: AccountConfig) => Promise<void>
-  onDelete: () => Promise<void>
-  onClose: () => void
-}) {
-  const [draft, setDraft] = useState(account)
-  const [saving, setSaving] = useState(false)
-  const [msg, setMsg] = useState('')
-  const [guardsOpen, setGuardsOpen] = useState(false)
-  const [showKeys, setShowKeys] = useState(false)
-
-  // Schema-driven form pre-populated from account.presetConfig.
-  const initialValues = useMemo(() => {
-    const out: Record<string, string> = {}
-    for (const [k, v] of Object.entries(account.presetConfig)) {
-      if (v != null) out[k] = String(v)
-    }
-    return out
-  }, [account])
-  const { fields, formData, setField, getSubmitData } = useSchemaForm(preset?.schema, initialValues)
-  const hasSensitive = fields.some(f => f.type === 'password')
-
-  // Sync draft.presetConfig from form state on every form change
-  useEffect(() => {
-    const submitData = getSubmitData()
-    setDraft(d => ({ ...d, presetConfig: submitData }))
-  }, [formData, getSubmitData])
-
-  useEffect(() => { setDraft(account) }, [account])
-
-  const dirty = JSON.stringify(draft) !== JSON.stringify(account)
-
-  const patchGuards = (guards: AccountConfig['guards']) => {
-    setDraft(d => ({ ...d, guards }))
-  }
-
-  const handleSave = async () => {
-    setSaving(true); setMsg('')
-    try {
-      await onSaveAccount(draft)
-      setMsg('Saved')
-      setTimeout(() => setMsg(''), 2000)
-    } catch (err) {
-      setMsg(err instanceof Error ? err.message : 'Save failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const guardTypes = (preset?.guardCategory === 'crypto') ? CRYPTO_GUARD_TYPES : SECURITIES_GUARD_TYPES
-
-  return (
-    <Dialog onClose={onClose} width="w-[560px]">
-      {/* Header */}
-      <div className="shrink-0 flex items-center justify-between px-6 py-4 border-b border-border">
-        <div className="flex items-center gap-3 min-w-0">
-          <h3 className="text-[14px] font-semibold text-text truncate">{account.id}</h3>
-          <HealthBadge health={health} size="md" />
-        </div>
-        <button onClick={onClose} className="text-text-muted hover:text-text p-1 transition-colors shrink-0">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <path d="M18 6L6 18M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-
-      {/* Body */}
-      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
-        <Section title="Configuration">
-          <div className="mb-3">
-            <span className="text-[12px] text-text-muted">Type</span>
-            <span className="ml-2 text-[12px] font-medium text-text">{preset?.label ?? account.presetId}</span>
-          </div>
-          <SchemaFormFields
-            fields={fields}
-            formData={formData}
-            setField={setField}
-            showSecrets={showKeys}
-          />
-          {hasSensitive && (
-            <button
-              onClick={() => setShowKeys(!showKeys)}
-              className="text-[11px] text-text-muted hover:text-text transition-colors mt-2"
-            >
-              {showKeys ? 'Hide secrets' : 'Show secrets'}
-            </button>
-          )}
-        </Section>
-
-        {/* Guards */}
-        <div>
-          <button
-            onClick={() => setGuardsOpen(!guardsOpen)}
-            className="flex items-center gap-1.5 text-[13px] font-semibold text-text-muted uppercase tracking-wide"
-          >
-            <svg
-              width="12" height="12" viewBox="0 0 24 24"
-              fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-              className={`transition-transform duration-150 ${guardsOpen ? 'rotate-90' : ''}`}
-            >
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
-            Guards ({draft.guards.length})
-          </button>
-          {guardsOpen && (
-            <div className="mt-3">
-              <GuardsSection
-                guards={draft.guards}
-                guardTypes={guardTypes}
-                description="Guards validate operations before execution. Order matters."
-                onChange={patchGuards}
-                onChangeImmediate={patchGuards}
-              />
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Footer */}
-      <div className="shrink-0 flex items-center px-6 py-4 border-t border-border">
-        <div className="flex items-center gap-3">
-          {dirty && (
-            <button onClick={handleSave} disabled={saving} className="btn-primary">
-              {saving ? 'Saving...' : 'Save'}
-            </button>
-          )}
-          {draft.enabled !== false && <ReconnectButton accountId={account.id} />}
-          <label className="flex items-center gap-2 cursor-pointer">
-            <Toggle checked={draft.enabled !== false} onChange={async (v) => {
-              const updated = { ...draft, enabled: v }
-              setDraft(updated)
-              await onSaveAccount(updated)
-            }} />
-            <span className="text-[12px] text-text-muted">{draft.enabled !== false ? 'Enabled' : 'Disabled'}</span>
-          </label>
-          {msg && <span className="text-[12px] text-text-muted">{msg}</span>}
-        </div>
-        <div className="flex-1" />
-        <DeleteButton label="Delete Account" onConfirm={onDelete} />
-      </div>
-    </Dialog>
-  )
-}
-
-// ==================== Delete Button ====================
-
-function DeleteButton({ label, onConfirm }: { label: string; onConfirm: () => void }) {
-  const [confirming, setConfirming] = useState(false)
-
-  if (confirming) {
-    return (
-      <div className="flex items-center gap-2">
-        <button onClick={() => { onConfirm(); setConfirming(false) }} className="btn-danger">
-          Confirm
-        </button>
-        <button onClick={() => setConfirming(false)} className="btn-secondary">
-          Cancel
-        </button>
-      </div>
-    )
-  }
-
-  return (
-    <button onClick={() => setConfirming(true)} className="btn-danger">
-      {label}
-    </button>
-  )
-}
-
-// SubtitleField is referenced via preset.subtitleFields elements, kept here for type consumers.
-export type { SubtitleField as _SubtitleField }

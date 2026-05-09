@@ -26,6 +26,15 @@ the item when done — git log is the history.
       entirely on localhost binding. Needs a proper auth story (shared
       admin token? session cookies? per-route scopes?) before any of it
       is exposed beyond a single-user local machine.
+- [ ] Retire `PUT /api/trading/config/uta/:id` once all on-disk UTAs
+      have derived ids. The route still accepts a full `UTAConfig` body
+      including credentials (we unmask masked values from the existing
+      record before re-saving) — that's a credential-handling surface
+      we'd rather not keep around long-term. Replacement: a narrower
+      `PATCH /uta/:id` that only allows label / guards / enabled
+      changes; credential rotation goes via DELETE + new POST. Wait
+      until the user-typed-id legacy UTAs have all migrated naturally
+      so we don't break edits on existing accounts.
 - [ ] Webhook tokens: add admin UI for listing / adding / rotating
       tokens inside the Webhook tab instead of requiring hand-editing
       `data/config/webhook.json`. Config surface exists; just missing
@@ -36,6 +45,18 @@ the item when done — git log is the history.
 
 ## Architecture
 
+- [ ] Extract `derivePositionMath(raw): { marketValue, unrealizedPnL }`
+      shared util. Today's IBroker contract requires every broker's
+      `getPositions` to multiply by `multiplier` when computing
+      marketValue / unrealizedPnL — but it's documentation-only, no
+      enforcement. Production brokers happen to dodge it because their
+      primary markets all have multiplier=1 (CCXT spot/perp) or the
+      upstream API hands back pre-multiplied values (Alpaca, IBKR).
+      First broker to grow custom OPT/FUT math will repeat Mock's
+      bug shape (cash-flow / marketValue / PnL all need multiplier).
+      Replace per-broker computation with one shared derive call;
+      brokers emit raw fields (qty, markPrice, multiplier, side,
+      avgCost) and downstream math is contract-uniform.
 - [ ] Unified config hot-reload. Right now every consumer of a config
       section has to solve "did the user edit this?" on its own —
       Telegram/MCP-Ask via `reconnectConnectors`, opentypebb via lazy
@@ -56,6 +77,22 @@ the item when done — git log is the history.
       something goes stale.
 
 ## Bugs
+
+- [ ] IBKR `getNativeKey` may use the wrong field for nativeKey. Surfaced
+      2026-05-07 during the Phase-3 revert (`afddd41`) when articulating
+      the per-broker uniqueness scheme. IBKR's `Contract.symbol` and
+      `Contract.localSymbol` aren't reliably unique — one symbol "AAPL"
+      matches the underlying stock + every option chain expiry + every
+      weekly + every LEAP. The actual primary key is `conId` (numeric).
+      If `IbkrBroker.getNativeKey` currently returns `localSymbol ||
+      symbol`, it works only by accident — the moment users hold the
+      same underlying across multiple expiries, aliceId starts colliding.
+      Audit `src/domain/trading/brokers/ibkr/IbkrBroker.ts` (look for
+      `getNativeKey`); change to `String(contract.conId)` if not already.
+      Also extend the same audit to Alpaca / LeverUp / Bybit-direct
+      brokers — each should have an explicit getNativeKey returning the
+      broker's documented primary key, not a lazy `localSymbol ||
+      symbol` fallback.
 
 - [ ] Snapshot / FX: after currency conversion, snapshot values
       occasionally come out as wildly wrong numbers (reported, cause
@@ -228,5 +265,32 @@ the item when done — git log is the history.
       adjacent): see the three in-memory bugs in the Bugs section.
       Those should be fixed independently regardless of whether the
       watcher project ever lands.
+
+## Brokers — others/leverup
+
+- [ ] LeverUp limit orders. The OCT relayer doc only exposes
+      `send-open-position` (market) and `send-close-position`. Limit
+      orders require either (a) a future LeverUp OCT endpoint or (b)
+      a separate on-chain code path calling
+      `openLimitOrderWithPyth(OpenDataInput, priceUpdateData)` directly
+      via viem walletClient (which brings back gas/Pyth-fee complexity
+      we deliberately punted). Currently `placeOrder` rejects non-MKT.
+- [ ] LeverUp partial close. `closeTrade(bytes32)` is whole-position;
+      LeverUp protocol doesn't expose a partial-close primitive yet.
+      `closePosition(qty)` ignores qty and closes the matched position
+      in full. Add when LeverUp adds it.
+- [ ] LeverUp EIP-712 type schema verification. Docs ship two
+      conflicting versions (flat `OneClickOpenPosition` vs nested
+      `OneClickOpenDataInput`). Current code defaults to nested per
+      the doc's viem code example; first real testnet round-trip
+      should confirm. Once verified, delete the losing variant from
+      `eip712.ts` and the variant flip-test from the spec.
+- [ ] LeverUp testnet pair list. Currently `TESTNET_PAIRS` aliases to
+      `MAINNET_PAIRS`. Confirm with Monad team whether testnet hosts
+      the same 23 pairs at the same addresses or a subset; replace
+      placeholder if needed.
+- [ ] LeverUp `unrealizedPnL` from positions REST is currently 0 in
+      `getPositions()`. Compute from (mark - entry) * qty * direction
+      once we have a stable mark-price source for non-Pyth-feed pairs.
 
 ## (seed more areas as they come up)
