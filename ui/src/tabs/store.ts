@@ -51,7 +51,21 @@ export type WorkspaceStore = WorkspaceState & WorkspaceActions
 const DEFAULT_GROUP_ID = 'g1'
 
 function newId(): string {
-  return crypto.randomUUID()
+  // Browser crypto.randomUUID() is only defined in secure contexts (HTTPS /
+  // localhost). LAN-IP HTTP access gets undefined, so build a v4 id ourselves.
+  // crypto.getRandomValues IS available over HTTP.
+  const c = typeof crypto !== 'undefined' ? crypto : undefined
+  if (c?.randomUUID) return c.randomUUID()
+  const bytes = new Uint8Array(16)
+  if (c?.getRandomValues) {
+    c.getRandomValues(bytes)
+  } else {
+    for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256)
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 function buildInitialState(): WorkspaceState {
@@ -218,7 +232,20 @@ export const useWorkspace = create<WorkspaceStore>()(
     }),
     {
       name: 'openalice.workspace.v2',
-      version: 2,
+      // v4: the `chat` and `notifications-inbox` ViewSpec kinds (and the
+      // traditional-chat / notifications-legacy / connectors-legacy
+      // ActivitySections) were removed with the legacy chat cluster. A
+      // persisted tab or selectedSidebar of a removed kind would make
+      // TabStrip call getView() on a missing kind and crash on rehydrate;
+      // bumping the version drops stale persisted state (no migrate fn —
+      // schema bump clears, per this store's loud-fail contract).
+      // v5: the demo `/api/news` handler shape mismatch poisoned any
+      // session that had a news tab open — NewsPage's `[...articles]`
+      // throws when res.items is undefined, and the rehydrate replays
+      // that tab open on every reload. Bump clears the loop.
+      // v6: introduced the `chat-landing` ViewKind; clear stale persisted
+      // tab state so no rehydrate references an unknown kind.
+      version: 6,
       // Persist only the data shape — actions are recreated by the store factory.
       partialize: (state) => ({
         tabs: state.tabs,

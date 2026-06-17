@@ -102,14 +102,9 @@ export function FinancialStatementsPanel({ symbol }: Props) {
   const rows = entry?.rows ?? []
   const rowDefs = ROWS[tab]
 
-  const endpointFor: Record<Tab, string> = {
-    balance: '/equity/fundamental/balance',
-    income: '/equity/fundamental/income',
-    cashflow: '/equity/fundamental/cash',
-  }
   const info = [
     entry?.provider ? `Source: ${entry.provider}` : 'Source: (unknown)',
-    `Endpoint: /api/market-data-v1${endpointFor[tab]}`,
+    `Endpoint: /api/market/equity/${tab === 'cashflow' ? 'cash' : tab}`,
     'Annual periods, most recent first. Values scaled (K / M / B / T).',
     'Blank cells are line items this provider doesn\u2019t report for the current period.',
   ].join('\n')
@@ -136,7 +131,7 @@ export function FinancialStatementsPanel({ symbol }: Props) {
       }
     >
       {loading && !entry && <div className="p-3 text-[12px] text-text-muted">Loading…</div>}
-      {entry?.error && <div className="p-3 text-[12px] text-red-400">{entry.error}</div>}
+      {entry?.error && <div className="p-3 text-[12px] text-red">{entry.error}</div>}
       {!entry?.error && rows.length === 0 && !loading && (
         <div className="p-3 text-[12px] text-text-muted">No data.</div>
       )}

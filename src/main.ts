@@ -1,78 +1,62 @@
 import { readFile, writeFile, mkdir } from 'fs/promises'
-import { resolve, dirname } from 'path'
-// Engine removed — AgentCenter is the top-level AI entry point
-import { loadConfig, readUTAsConfig, purgeEphemeralUTAs } from './core/config.js'
-import type { Plugin, EngineContext, ReconnectResult } from './core/types.js'
+import { dirname } from 'path'
+// The in-process AI loop (AgentCenter, then GenerateRouter + AgentWork) is gone
+// as of 0.40 — the model loop runs inside the native workspace CLIs; autonomous
+// runs go through headless workspace dispatch (cron → workspace).
+import { loadConfig } from './core/config.js'
+import { printLegacyDataNotice } from './core/legacy-data-notice.js'
+import { dataPath, defaultPath } from '@/core/paths.js'
+import type { Plugin, EngineContext } from './core/types.js'
 import { McpPlugin } from './server/mcp.js'
-import { TelegramPlugin } from './connectors/telegram/index.js'
 import { WebPlugin } from './webui/index.js'
-import { McpAskPlugin } from './connectors/mcp-ask/index.js'
+import { createWorkspaceServiceRef } from './webui/plugin.js'
 import { createThinkingTools } from './tool/thinking.js'
-import { UTAManager, createSnapshotService, createSnapshotScheduler } from './domain/trading/index.js'
-import { FxService } from './domain/trading/fx-service.js'
+import { createUTAClient } from '@traderalice/uta-protocol'
+import { UTAManagerSDK } from './services/uta-client/index.js'
+import { waitForUTAReady } from './services/uta-supervisor/health.js'
 import { createTradingTools } from './tool/trading.js'
-import { Brain } from './domain/brain/index.js'
-import { createBrainTools } from './tool/brain.js'
-import type { BrainExportState } from './domain/brain/index.js'
-import { createBrowserTools } from './tool/browser.js'
 import { SymbolIndex } from './domain/market-data/equity/index.js'
 import { CommodityCatalog } from './domain/market-data/commodity/index.js'
 import { createEquityTools } from './tool/equity.js'
+import { createEtfTools } from './tool/etf.js'
+import { withHubCalendars } from './domain/market-data/hub-data.js'
 import { getSDKExecutor, buildRouteMap, SDKEquityClient, SDKCryptoClient, SDKCurrencyClient, SDKEtfClient, SDKIndexClient, SDKDerivativesClient, SDKCommodityClient, SDKEconomyClient } from './domain/market-data/client/typebb/index.js'
 import type { EquityClientLike, CryptoClientLike, CurrencyClientLike, EtfClientLike, IndexClientLike, DerivativesClientLike, CommodityClientLike, EconomyClientLike } from './domain/market-data/client/types.js'
 import { buildSDKCredentials } from './domain/market-data/credential-map.js'
-import { OpenBBEquityClient } from './domain/market-data/client/openbb-api/equity-client.js'
-import { OpenBBCryptoClient } from './domain/market-data/client/openbb-api/crypto-client.js'
-import { OpenBBCurrencyClient } from './domain/market-data/client/openbb-api/currency-client.js'
-import { OpenBBCommodityClient } from './domain/market-data/client/openbb-api/commodity-client.js'
-import { OpenBBEconomyClient } from './domain/market-data/client/openbb-api/economy-client.js'
 import { createMarketSearchTools } from './tool/market.js'
-import { createAnalysisTools } from './tool/analysis.js'
+import { createQuantTools } from './tool/quant.js'
+import { createBarService } from './domain/market-data/bars/index.js'
+import { createReferenceData } from './domain/market-data/reference/service.js'
+import { createSectorRotationTools } from './tool/sector-rotation.js'
+import { createReferenceBoardTools } from './tool/reference-board.js'
+import { createDerivativesTools } from './tool/derivatives.js'
+import { createIndexTools } from './tool/indices.js'
 import { createEconomyTools } from './tool/economy.js'
-import { createSessionTools } from './tool/session.js'
 import { SessionStore } from './core/session.js'
-import { ConnectorCenter } from './core/connector-center.js'
-import { createNotificationsStore } from './core/notifications-store.js'
+import { createInboxStore } from './core/inbox-store.js'
 import { ToolCenter } from './core/tool-center.js'
-import { AgentCenter } from './core/agent-center.js'
-import { GenerateRouter } from './core/ai-provider-manager.js'
-import { VercelAIProvider } from './ai-providers/vercel-ai-sdk/vercel-provider.js'
-import { AgentSdkProvider } from './ai-providers/agent-sdk/agent-sdk-provider.js'
-import { CodexProvider } from './ai-providers/codex/index.js'
+import { WorkspaceToolCenter } from './core/workspace-tool-center.js'
+import { inboxPushFactory } from './tool/inbox-push.js'
+import { inboxReadFactory } from './tool/inbox-read.js'
+import { workspacePathFactory } from './tool/workspace-path.js'
+import { createEntityStore } from './core/entity-store.js'
+import { entityUpsertFactory } from './tool/entity-upsert.js'
+import { entitySearchFactory } from './tool/entity-search.js'
 import { createEventLog } from './core/event-log.js'
 import { createToolCallLog } from './core/tool-call-log.js'
 import { createListenerRegistry } from './core/listener-registry.js'
 import { createEventBus } from './core/event-bus.js'
 import { createCronEngine, createCronListener, createCronTools } from './task/cron/index.js'
-import { createHeartbeat } from './task/heartbeat/index.js'
 import { createMetricsListener } from './task/metrics/index.js'
-import { createTaskRouter } from './task/task-router/index.js'
 import { NewsCollectorStore, NewsCollector } from './domain/news/index.js'
 import { createNewsArchiveTools } from './tool/news.js'
 
 // ==================== Persistence paths ====================
 
-const BRAIN_FILE = resolve('data/brain/commit.json')
-
-const FRONTAL_LOBE_FILE = resolve('data/brain/frontal-lobe.md')
-const PERSONA_FILE = resolve('data/brain/persona.md')
-const PERSONA_DEFAULT = resolve('default/persona.default.md')
-const HEARTBEAT_FILE = resolve('data/brain/heartbeat.md')
-const HEARTBEAT_DEFAULT = resolve('default/heartbeat.default.md')
+const PERSONA_FILE = dataPath('brain', 'persona.md')
+const PERSONA_DEFAULT = defaultPath('persona.default.md')
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
-
-/** Render a timestamp as "Nm ago" / "Nh ago" / "Nd ago" for prompt injection. */
-function formatRelativeAge(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime()
-  if (diffMs < 60_000) return 'just now'
-  const mins = Math.floor(diffMs / 60_000)
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
 
 /** Read a file, copying from default if it doesn't exist yet. */
 async function readWithDefault(target: string, defaultFile: string): Promise<string> {
@@ -86,6 +70,11 @@ async function readWithDefault(target: string, defaultFile: string): Promise<str
 }
 
 async function main() {
+  // Before migrations create the new config dir: if this checkout carries a
+  // pre-global-root data/ store, tell the user how to adopt it (covers bare
+  // `pnpm start`; guardian children get OPENALICE_HOME so this stays quiet).
+  printLegacyDataNotice('[alice]')
+
   const config = await loadConfig()
 
   // ==================== Event Log ====================
@@ -102,65 +91,39 @@ async function main() {
 
   const toolCenter = new ToolCenter()
 
-  // ==================== Trading Account Manager ====================
+  // ==================== Workspace Tool Center (factories — instantiated per wsId at MCP request time) ====================
 
-  const utaManager = new UTAManager({ eventLog, toolCenter })
+  const workspaceToolCenter = new WorkspaceToolCenter()
+  workspaceToolCenter.register(inboxPushFactory)
+  workspaceToolCenter.register(inboxReadFactory)
+  workspaceToolCenter.register(workspacePathFactory)
+  workspaceToolCenter.register(entityUpsertFactory)
+  workspaceToolCenter.register(entitySearchFactory)
 
-  // Ephemeral test UTAs from a previous session are purged before init —
-  // their config rows are removed and `data/trading/<id>/` is wiped, so
-  // fixture-driven tests start each session from a clean slate.
-  const survivors = await purgeEphemeralUTAs(await readUTAsConfig())
-  for (const accCfg of survivors) {
-    if (accCfg.enabled === false) continue
-    await utaManager.initUTA(accCfg)
+  // ==================== UTA SDK (HTTP boundary) ====================
+  //
+  // Trading domain lives in the co-located UTA service spawned by
+  // Guardian (`scripts/guardian/dev.ts` in dev / Docker `tini` supervisor
+  // in prod). Alice talks to it through the SDK — broker init, snapshot
+  // scheduling, FX, and ephemeral-UTA purges all live in UTA's
+  // `services/uta/src/main.ts`.
+
+  const utaUrl = process.env['OPENALICE_UTA_URL']
+  if (!utaUrl) {
+    throw new Error('OPENALICE_UTA_URL not set — Guardian must spawn the UTA service before Alice boots')
   }
-  utaManager.registerCcxtToolsIfNeeded()
-
-  // ==================== Snapshot ====================
-
-  const snapshotService = createSnapshotService({ utaManager, eventLog })
-  utaManager.setSnapshotHooks({
-    onPostPush: (id) => { snapshotService.takeSnapshot(id, 'post-push') },
-    onPostReject: (id) => { snapshotService.takeSnapshot(id, 'post-reject') },
-  })
-
-  // ==================== Brain ====================
-
-  const [brainExport] = await Promise.all([
-    readFile(BRAIN_FILE, 'utf-8').then((r) => JSON.parse(r) as BrainExportState).catch(() => undefined),
-    readWithDefault(PERSONA_FILE, PERSONA_DEFAULT),
-    readWithDefault(HEARTBEAT_FILE, HEARTBEAT_DEFAULT),
-  ])
-
-  const brainDir = resolve('data/brain')
-  const brainOnCommit = async (state: BrainExportState) => {
-    await mkdir(brainDir, { recursive: true })
-    await writeFile(BRAIN_FILE, JSON.stringify(state, null, 2))
-    await writeFile(FRONTAL_LOBE_FILE, state.state.frontalLobe)
+  const utaClient = createUTAClient({ baseUrl: utaUrl })
+  const utaHealth = await waitForUTAReady({ baseUrl: utaUrl, timeoutMs: 15_000 })
+  if (!utaHealth) {
+    throw new Error(`UTA service at ${utaUrl} did not become ready within 15s`)
   }
+  console.log(`uta: ready (${utaHealth.utas} accounts, startedAt=${utaHealth.startedAt})`)
+  const utaManager = new UTAManagerSDK({ client: utaClient })
 
-  const brain = brainExport
-    ? Brain.restore(brainExport, { onCommit: brainOnCommit })
-    : new Brain({ onCommit: brainOnCommit })
-
-  /** Re-read persona from disk + live frontal-lobe note on each request.
-   *  Frames the note as "you wrote this Nh ago" rather than "current state"
-   *  — the time-distance cue stops her from treating a stale note as
-   *  ground truth. */
-  const getInstructions = async () => {
-    const persona = await readFile(PERSONA_FILE, 'utf-8').catch(() => '')
-    const { content, updatedAt } = brain.getFrontalLobeMeta()
-    if (!content) return persona
-    const age = updatedAt ? formatRelativeAge(updatedAt) : 'at some point'
-    return [
-      persona,
-      '---',
-      '## Notes you wrote to yourself',
-      `_(written ${age})_`,
-      '',
-      content,
-    ].join('\n')
-  }
+  // ==================== Persona ====================
+  // The persona file is seeded on first run so the user has an editable
+  // override (consumed by the workspace context-injector).
+  await readWithDefault(PERSONA_FILE, PERSONA_DEFAULT)
 
   // ==================== Cron ====================
 
@@ -182,23 +145,15 @@ async function main() {
   let cryptoClient: CryptoClientLike
   let currencyClient: CurrencyClientLike
   let commodityClient: CommodityClientLike
-  let etfClient: EtfClientLike | undefined
-  let indexClient: IndexClientLike | undefined
-  let derivativesClient: DerivativesClientLike | undefined
+  let etfClient: EtfClientLike
+  let indexClient: IndexClientLike
+  let derivativesClient: DerivativesClientLike
   let economyClient: EconomyClientLike
 
-  if (config.marketData.backend === 'openbb-api') {
-    const url = config.marketData.apiUrl
-    const keys = config.marketData.providerKeys
-    equityClient = new OpenBBEquityClient(url, providers.equity, keys)
-    cryptoClient = new OpenBBCryptoClient(url, providers.crypto, keys)
-    currencyClient = new OpenBBCurrencyClient(url, providers.currency, keys)
-    commodityClient = new OpenBBCommodityClient(url, providers.commodity, keys) as unknown as CommodityClientLike
-    economyClient = new OpenBBEconomyClient(url, 'federal_reserve', keys) as unknown as EconomyClientLike
-  } else {
+  {
     const executor = getSDKExecutor()
     const routeMap = buildRouteMap()
-    const credentials = buildSDKCredentials(config.marketData.providerKeys)
+    const credentials = buildSDKCredentials(config.marketData.providerKeys, config.marketData.hub)
     equityClient = new SDKEquityClient(executor, 'equity', providers.equity, credentials, routeMap)
     cryptoClient = new SDKCryptoClient(executor, 'crypto', providers.crypto, credentials, routeMap)
     currencyClient = new SDKCurrencyClient(executor, 'currency', providers.currency, credentials, routeMap)
@@ -208,11 +163,6 @@ async function main() {
     derivativesClient = new SDKDerivativesClient(executor, 'derivatives', providers.equity, credentials, routeMap)
     economyClient = new SDKEconomyClient(executor, 'economy', 'federal_reserve', credentials, routeMap)
   }
-
-  // ==================== FX Service ====================
-
-  const fxService = new FxService(currencyClient)
-  utaManager.setFxService(fxService)
 
   // ==================== Equity Symbol Index ====================
 
@@ -224,90 +174,92 @@ async function main() {
 
   const marketSearch = { symbolIndex, cryptoClient, currencyClient, commodityCatalog }
 
+  // Federated bar layer — vendor (OpenTypeBB) + broker (UTA) OHLCV behind one
+  // barId-keyed interface. Vendor branch live now; UTA branch lands with Phase 1.
+  const barService = createBarService({
+    marketSearch,
+    equityClient,
+    cryptoClient,
+    currencyClient,
+    commodityClient,
+    utaManager,
+    vendorProviders: config.marketData.providers,
+  })
+
+  // Hub-first calendars: tools, CLI and boards all inherit through the
+  // client seam. No-op when the hub is disabled.
+  equityClient = withHubCalendars(equityClient, config.marketData.hub)
+
+  // Reference-data contract — board-shaped low-frequency data (movers, macro,
+  // calendar, …). Alice's own standard; the future hosted-hub seam.
+  const reference = createReferenceData({
+    equityClient,
+    economyClient,
+    derivativesClient,
+    indexClient,
+    equityProvider: config.marketData.providers.equity,
+    hub: config.marketData.hub,
+  })
+
   // ==================== Tool Registration ====================
 
   toolCenter.register(createThinkingTools(), 'thinking')
 
   // One unified set of trading tools — routes via `source` parameter at runtime
   toolCenter.register(
-    createTradingTools(utaManager, fxService),
+    createTradingTools(utaManager),
     'trading',
   )
 
-  toolCenter.register(createBrainTools(brain), 'brain')
-  toolCenter.register(createBrowserTools(), 'browser')
   toolCenter.register(createCronTools(cronEngine), 'cron')
   toolCenter.register(createMarketSearchTools(marketSearch), 'market-search')
+  toolCenter.register(createReferenceBoardTools(reference), 'market-board')
   toolCenter.register(createEquityTools(equityClient), 'equity')
-  if (config.news.enabled) {
-    toolCenter.register(createNewsArchiveTools(newsStore), 'news')
+  if (etfClient) {
+    toolCenter.register(createEtfTools(etfClient), 'etf')
   }
-  toolCenter.register(createAnalysisTools(equityClient, cryptoClient, currencyClient, commodityClient), 'analysis')
+  if (config.news.enabled) {
+    toolCenter.register(createNewsArchiveTools(newsStore), 'rss')
+  }
+  // v1 calculateIndicator (createAnalysisTools) is retired from the tool surface
+  // — calculateQuant (v2, barId-keyed) supersedes it and the two descriptions
+  // confused the model / bloated context. The code remains for now.
+  toolCenter.register(createQuantTools({ barService }), 'quant')
+  toolCenter.register(createSectorRotationTools(equityClient, config.marketData.hub), 'sector-rotation')
+  if (derivativesClient) {
+    toolCenter.register(createDerivativesTools(derivativesClient), 'derivatives')
+  }
+  if (indexClient) {
+    toolCenter.register(createIndexTools(indexClient), 'indices')
+  }
   toolCenter.register(createEconomyTools(economyClient, commodityClient), 'economy')
 
   console.log(`tool-center: ${toolCenter.list().length} tools registered`)
 
-  // ==================== AI Provider Chain ====================
+  // ==================== Inbox store ====================
 
-  const vercelProvider = new VercelAIProvider(
-    () => toolCenter.getVercelTools(),
-    getInstructions,
-    config.agent.maxSteps,
-  )
-  const agentSdkProvider = new AgentSdkProvider(
-    () => toolCenter.getVercelTools(),
-    getInstructions,
-  )
-  const codexProvider = new CodexProvider(
-    () => toolCenter.getVercelTools(),
-    getInstructions,
-  )
-  const router = new GenerateRouter(vercelProvider, agentSdkProvider, codexProvider)
+  const inboxStore = createInboxStore()
 
-  const agentCenter = new AgentCenter({
-    router,
-    compaction: config.compaction,
-    toolCallLog,
-  })
+  // ==================== Entity store (durable cross-workspace tracked-index) ====================
 
-  // ==================== Notifications store + Connector Center ====================
-
-  const notificationsStore = createNotificationsStore()
-  const connectorCenter = new ConnectorCenter({ eventLog, listenerRegistry, notificationsStore })
-
-  // Session awareness tools (registered here because they need connectorCenter)
-  toolCenter.register(createSessionTools(connectorCenter), 'session')
+  const entityStore = createEntityStore()
 
   // ==================== Cron Listener ====================
 
-  const cronSession = new SessionStore('cron/default')
-  await cronSession.restore()
-  const cronListener = createCronListener({ connectorCenter, agentCenter, registry: listenerRegistry, session: cronSession })
+  // Cross-plugin ref so the cron listener (and McpPlugin) can reach the
+  // WorkspaceService even though WebPlugin — its actual creator — starts later.
+  // `ref.current` is null until the plugin boots; an early cron fire is a loud
+  // skip (see cron listener). Created here so cron dispatch can hold it.
+  const workspaceServiceRef = createWorkspaceServiceRef()
+
+  // Cron fires now dispatch a headless Workspace run (job → workspace+agent),
+  // not the legacy in-process AgentWork path.
+  const cronListener = createCronListener({ registry: listenerRegistry, workspaceServiceRef })
   await cronListener.start()
 
-  // ==================== Snapshot Scheduler ====================
-
-  const snapshotScheduler = createSnapshotScheduler({ snapshotService, cronEngine, registry: listenerRegistry, config: config.snapshot })
-  await snapshotScheduler.start()
-  if (config.snapshot.enabled) {
-    console.log(`snapshot: scheduler started (every ${config.snapshot.every})`)
-  }
-
-  // ==================== Heartbeat ====================
-
-  const heartbeat = createHeartbeat({
-    config: config.heartbeat,
-    connectorCenter, cronEngine, agentCenter, registry: listenerRegistry,
-  })
-  await heartbeat.start()
-  if (config.heartbeat.enabled) {
-    console.log(`heartbeat: enabled (every ${config.heartbeat.every})`)
-  }
-
-  // ==================== Task Router (external `task.requested` handler) ====================
-
-  const taskRouter = createTaskRouter({ connectorCenter, agentCenter, registry: listenerRegistry })
-  await taskRouter.start()
+  // Snapshot scheduler lives in UTA after Step 6 — Alice no longer
+  // drives the periodic equity-curve writes. The UTA service starts
+  // its own scheduler at boot.
 
   // ==================== Event Metrics (wildcard observer) ====================
 
@@ -340,95 +292,50 @@ async function main() {
   // Core plugins — always-on, not toggleable at runtime
   const corePlugins: Plugin[] = []
 
-  // MCP Server is always active when a port is set — Claude Code provider depends on it for tools
-  if (config.connectors.mcp.port) {
-    corePlugins.push(new McpPlugin(toolCenter, config.connectors.mcp.port))
+  // workspaceServiceRef is created earlier (Cron Listener section) so cron
+  // dispatch shares the same box the WebPlugin fills on start.
+
+  // MCP Server is always active when a port is set — Claude Code provider depends on it for tools.
+  // Lives at top-level config (not under connectors:) because it exports
+  // ToolCenter outward rather than consuming chat input.
+  if (config.mcp.port) {
+    corePlugins.push(new McpPlugin(
+      toolCenter,
+      config.mcp.port,
+      workspaceToolCenter,
+      inboxStore,
+      entityStore,
+      () => workspaceServiceRef.current,
+    ))
   }
 
   // Web UI is always active (no enabled flag)
   if (config.connectors.web.port) {
-    corePlugins.push(new WebPlugin({ port: config.connectors.web.port }))
+    corePlugins.push(new WebPlugin(
+      { port: config.connectors.web.port, mcpPort: config.mcp.port },
+      workspaceServiceRef,
+    ))
   }
 
-  // Optional plugins — toggleable at runtime via reconnectConnectors()
+  // Optional plugins — none today. The legacy connector cluster
+  // (Telegram / MCP-Ask) was removed; the map is kept (empty) so the
+  // start/stop iteration below stays uniform and future optional
+  // plugins have a home.
   const optionalPlugins = new Map<string, Plugin>()
-
-  if (config.connectors.mcpAsk.enabled && config.connectors.mcpAsk.port) {
-    optionalPlugins.set('mcp-ask', new McpAskPlugin({ port: config.connectors.mcpAsk.port }))
-  }
-
-  if (config.connectors.telegram.enabled && config.connectors.telegram.botToken) {
-    optionalPlugins.set('telegram', new TelegramPlugin({
-      token: config.connectors.telegram.botToken,
-      allowedChatIds: config.connectors.telegram.chatIds,
-    }))
-  }
-
-  // ==================== Connector Reconnect ====================
-
-  let connectorsReconnecting = false
-  const reconnectConnectors = async (): Promise<ReconnectResult> => {
-    if (connectorsReconnecting) return { success: false, error: 'Reconnect already in progress' }
-    connectorsReconnecting = true
-    try {
-      const fresh = await loadConfig()
-      const changes: string[] = []
-
-      // --- MCP Ask ---
-      const mcpAskWanted = fresh.connectors.mcpAsk.enabled && !!fresh.connectors.mcpAsk.port
-      const mcpAskRunning = optionalPlugins.has('mcp-ask')
-      if (mcpAskRunning && !mcpAskWanted) {
-        await optionalPlugins.get('mcp-ask')!.stop()
-        optionalPlugins.delete('mcp-ask')
-        changes.push('mcp-ask stopped')
-      } else if (!mcpAskRunning && mcpAskWanted) {
-        const p = new McpAskPlugin({ port: fresh.connectors.mcpAsk.port! })
-        await p.start(ctx)
-        optionalPlugins.set('mcp-ask', p)
-        changes.push('mcp-ask started')
-      }
-
-      // --- Telegram ---
-      const telegramWanted = fresh.connectors.telegram.enabled && !!fresh.connectors.telegram.botToken
-      const telegramRunning = optionalPlugins.has('telegram')
-      if (telegramRunning && !telegramWanted) {
-        await optionalPlugins.get('telegram')!.stop()
-        optionalPlugins.delete('telegram')
-        changes.push('telegram stopped')
-      } else if (!telegramRunning && telegramWanted) {
-        const p = new TelegramPlugin({
-          token: fresh.connectors.telegram.botToken!,
-          allowedChatIds: fresh.connectors.telegram.chatIds,
-        })
-        await p.start(ctx)
-        optionalPlugins.set('telegram', p)
-        changes.push('telegram started')
-      }
-
-      if (changes.length > 0) {
-        console.log(`reconnect: connectors — ${changes.join(', ')}`)
-      }
-      return { success: true, message: changes.length > 0 ? changes.join(', ') : 'no changes' }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error('reconnect: connectors failed:', msg)
-      return { success: false, error: msg }
-    } finally {
-      connectorsReconnecting = false
-    }
-  }
 
   // ==================== Engine Context ====================
 
   const ctx: EngineContext = {
-    config, connectorCenter, notificationsStore, agentCenter, eventLog, toolCallLog, heartbeat, cronEngine, toolCenter,
+    config, inboxStore, entityStore, eventLog, toolCallLog, cronEngine, toolCenter,
     listenerRegistry,
     fire: createEventBus(eventLog),
     bbEngine: getSDKExecutor(),
     marketSearch,
-    utaManager, fxService, snapshotService,
+    equityClient,
+    barService,
+    reference,
+    utaManager,
     newsProvider: newsStore,
-    reconnectConnectors,
   }
 
   for (const plugin of [...corePlugins, ...optionalPlugins.values()]) {
@@ -438,36 +345,18 @@ async function main() {
 
   console.log('engine: started')
 
-  // ==================== Broker catalog refresh ====================
-  // Brokers that cache their catalog locally (Alpaca, CCXT, Mock) need
-  // periodic refreshes so newly listed assets surface in search and
-  // delisted ones drop. The optional `refreshCatalog` is a no-op for
-  // brokers that don't cache (IBKR — server-side reqMatchingSymbols).
-  const CATALOG_REFRESH_MS = 6 * 60 * 60 * 1000  // 6h
-  const catalogRefreshTimer = setInterval(() => {
-    for (const uta of utaManager.resolve()) {
-      uta.refreshCatalog().catch((err) => {
-        console.warn(`[catalog-refresh] ${uta.id} failed:`, err instanceof Error ? err.message : err)
-      })
-    }
-  }, CATALOG_REFRESH_MS)
-  // Don't keep the process alive just for the refresh loop — shutdown logic
-  // below clears it anyway, this is belt-and-braces for clean Node exit.
-  catalogRefreshTimer.unref?.()
+  // Broker catalog refresh, snapshot scheduling, and broker close-on-
+  // shutdown all live in the UTA service after Step 6.
 
   // ==================== Shutdown ====================
 
   let stopped = false
   const shutdown = async () => {
     stopped = true
-    clearInterval(catalogRefreshTimer)
     newsCollector?.stop()
-    snapshotScheduler.stop()
-    heartbeat.stop()
     metricsListener.stop()
     cronListener.stop()
     cronEngine.stop()
-    connectorCenter.stop()
     await listenerRegistry.stop()
     for (const plugin of [...corePlugins, ...optionalPlugins.values()]) {
       await plugin.stop()
@@ -475,7 +364,6 @@ async function main() {
     await newsStore.close()
     await toolCallLog.close()
     await eventLog.close()
-    await utaManager.closeAll()
     process.exit(0)
   }
   process.on('SIGINT', shutdown)

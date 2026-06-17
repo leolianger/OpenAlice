@@ -2,43 +2,37 @@
  * Unified API client — re-exports domain modules as the `api` namespace.
  * Existing imports like `import { api } from '../api'` continue to work.
  */
-import { chatApi } from './chat'
 import { configApi } from './config'
 import { eventsApi } from './events'
 import { cronApi } from './cron'
-import { heartbeatApi } from './heartbeat'
 import { tradingApi } from './trading'
 import { marketDataApi } from './openbb'
-import { devApi } from './dev'
 import { toolsApi } from './tools'
-import { channelsApi } from './channels'
 import { agentStatusApi } from './agentStatus'
 import { personaApi } from './persona'
 import { newsApi } from './news'
-import { diaryApi } from './diary'
-import { brainApi } from './brain'
 import { topologyApi } from './topology'
 import { marketApi } from './market'
-import { notificationsApi } from './notifications'
+import { inboxApi } from './inbox'
+import { entitiesApi } from './entities'
+import { versionApi } from './version'
+import { headlessApi } from './headless'
 export const api = {
-  chat: chatApi,
   config: configApi,
   events: eventsApi,
   cron: cronApi,
-  heartbeat: heartbeatApi,
   trading: tradingApi,
   marketData: marketDataApi,
-  dev: devApi,
   tools: toolsApi,
-  channels: channelsApi,
   agentStatus: agentStatusApi,
   persona: personaApi,
   news: newsApi,
-  diary: diaryApi,
-  brain: brainApi,
   topology: topologyApi,
   market: marketApi,
-  notifications: notificationsApi,
+  inbox: inboxApi,
+  entities: entitiesApi,
+  version: versionApi,
+  headless: headlessApi,
 }
 
 // Re-export all types for convenience
@@ -47,6 +41,8 @@ export type {
   Profile,
   AIBackend,
   Preset,
+  WireShape,
+  SerializedRegion,
   JsonSchema,
   JsonSchemaProperty,
   ChatMessage,
@@ -66,11 +62,18 @@ export type {
   WalletCommitLog,
   ReconnectResult,
   ConnectorsConfig,
+  McpConfig,
   NewsCollectorConfig,
   NewsCollectorFeed,
   ToolCallRecord,
   UTASnapshotSummary,
   EquityCurvePoint,
+  HistoryContract,
+  OrderHistoryEntry,
+  OrderHistoryStatus,
+  OrderHistorySource,
+  TradeHistoryEntry,
+  TradeHistorySource,
   NewsArticle,
   NewsListResponse,
   TopologyResponse,

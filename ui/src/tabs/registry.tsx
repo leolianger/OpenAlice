@@ -1,23 +1,30 @@
 import type { ComponentType } from 'react'
-import type { ChannelListItem } from '../api/channels'
+import type { Workspace } from '../components/workspace/api'
 import type { ViewKind, ViewSpec } from './types'
 
-import { ChatPage } from '../pages/ChatPage'
-import { DiaryPage } from '../pages/DiaryPage'
 import { PortfolioPage } from '../pages/PortfolioPage'
 import { AutomationPage } from '../pages/AutomationPage'
 import { NewsPage } from '../pages/NewsPage'
 import { MarketPage } from '../pages/MarketPage'
+import { MarketRotationPage } from '../pages/MarketRotationPage'
+import { MarketBoardPage, MARKET_BOARD_TITLES } from '../pages/MarketBoardPage'
 import { MarketDetailPage } from '../pages/MarketDetailPage'
 import { SettingsPage } from '../pages/SettingsPage'
 import { AIProviderPage } from '../pages/AIProviderPage'
 import { TradingPage } from '../pages/TradingPage'
-import { ConnectorsPage } from '../pages/ConnectorsPage'
+import { MCPPage } from '../pages/MCPPage'
 import { MarketDataPage } from '../pages/MarketDataPage'
 import { NewsCollectorPage } from '../pages/NewsCollectorPage'
 import { UTADetailPage } from '../pages/UTADetailPage'
 import { DevPage } from '../pages/DevPage'
-import { NotificationsInboxPage } from '../pages/NotificationsInboxPage'
+import { InboxPage } from '../pages/InboxPage'
+import { TrackedPage } from '../pages/TrackedPage'
+import { ChatLandingPage } from '../pages/ChatLandingPage'
+import { WorkspaceListPage } from '../pages/WorkspaceListPage'
+import { WorkspacePage } from '../pages/WorkspacePage'
+import { TemplateCatalogPage } from '../pages/TemplateCatalogPage'
+import { TemplateDetailPage } from '../pages/TemplateDetailPage'
+import { FileViewerPage } from '../pages/FileViewerPage'
 
 /**
  * Central registry mapping each ViewKind to its render component and URL
@@ -29,7 +36,9 @@ import { NotificationsInboxPage } from '../pages/NotificationsInboxPage'
  */
 
 export interface TitleCtx {
-  channels: ChannelListItem[]
+  /** Workspaces list, threaded from WorkspacesContext. Used by workspaceModule
+   *  to render tab titles as `<tag> · <sessionName>` instead of opaque UUIDs. */
+  workspaces?: readonly Workspace[]
 }
 
 interface ViewProps<K extends ViewKind> {
@@ -49,27 +58,6 @@ export interface ViewModule<K extends ViewKind> {
 
 // ==================== Per-kind modules ====================
 
-const chatModule: ViewModule<'chat'> = {
-  kind: 'chat',
-  title(spec, ctx) {
-    const ch = ctx.channels.find((c) => c.id === spec.params.channelId)
-    return ch?.label ?? spec.params.channelId
-  },
-  toUrl(spec) {
-    return spec.params.channelId === 'default'
-      ? '/chat'
-      : `/chat/${encodeURIComponent(spec.params.channelId)}`
-  },
-  Component: ChatPage,
-}
-
-const diaryModule: ViewModule<'diary'> = {
-  kind: 'diary',
-  title: () => 'Diary',
-  toUrl: () => '/diary',
-  Component: () => <DiaryPage />,
-}
-
 const portfolioModule: ViewModule<'portfolio'> = {
   kind: 'portfolio',
   title: () => 'Portfolio',
@@ -82,9 +70,9 @@ const automationSectionTitle: Record<
   string
 > = {
   flow: 'Flow',
-  heartbeat: 'Heartbeat',
   cron: 'Cron Jobs',
   webhook: 'Webhook',
+  runs: 'Runs',
 }
 
 const automationModule: ViewModule<'automation'> = {
@@ -108,11 +96,26 @@ const marketListModule: ViewModule<'market-list'> = {
   Component: () => <MarketPage />,
 }
 
+const marketRotationModule: ViewModule<'market-rotation'> = {
+  kind: 'market-rotation',
+  title: () => 'Sector Rotation',
+  toUrl: () => '/market/rotation',
+  Component: () => <MarketRotationPage />,
+}
+
+const marketBoardModule: ViewModule<'market-board'> = {
+  kind: 'market-board',
+  title: (spec) => MARKET_BOARD_TITLES[spec.params.board],
+  toUrl: (spec) => `/market/boards/${spec.params.board}`,
+  Component: MarketBoardPage,
+}
+
 const marketDetailModule: ViewModule<'market-detail'> = {
   kind: 'market-detail',
   title: (spec) => `${spec.params.symbol}`,
   toUrl: (spec) =>
-    `/market/${spec.params.assetClass}/${encodeURIComponent(spec.params.symbol)}`,
+    `/market/${spec.params.assetClass}/${encodeURIComponent(spec.params.symbol)}` +
+    (spec.params.source ? `?source=${encodeURIComponent(spec.params.source)}` : ''),
   Component: MarketDetailPage,
 }
 
@@ -122,8 +125,8 @@ const settingsCategoryTitle: Record<
 > = {
   general: 'Settings',
   'ai-provider': 'AI Provider',
-  trading: 'Trading Accounts',
-  connectors: 'Connectors',
+  trading: 'Trading',
+  mcp: 'MCP Server',
   'market-data': 'Market Data',
   'news-collector': 'News Sources',
 }
@@ -133,7 +136,7 @@ function SettingsRouter({ spec }: ViewProps<'settings'>) {
     case 'general': return <SettingsPage />
     case 'ai-provider': return <AIProviderPage />
     case 'trading': return <TradingPage />
-    case 'connectors': return <ConnectorsPage />
+    case 'mcp': return <MCPPage />
     case 'market-data': return <MarketDataPage />
     case 'news-collector': return <NewsCollectorPage />
   }
@@ -157,9 +160,7 @@ const utaDetailModule: ViewModule<'uta-detail'> = {
 }
 
 const devTabTitle: Record<Extract<ViewSpec, { kind: 'dev' }>['params']['tab'], string> = {
-  connectors: 'Connectors',
   tools: 'Tools',
-  sessions: 'Sessions',
   snapshots: 'Snapshots',
   logs: 'Logs',
   simulator: 'Simulator',
@@ -172,27 +173,97 @@ const devModule: ViewModule<'dev'> = {
   Component: DevPage,
 }
 
-const notificationsInboxModule: ViewModule<'notifications-inbox'> = {
-  kind: 'notifications-inbox',
-  title: () => 'Notifications',
-  toUrl: () => '/notifications',
-  Component: NotificationsInboxPage,
+const inboxModule: ViewModule<'inbox'> = {
+  kind: 'inbox',
+  title: () => 'Inbox',
+  toUrl: () => '/inbox',
+  Component: InboxPage,
+}
+
+const trackedModule: ViewModule<'tracked'> = {
+  kind: 'tracked',
+  title: () => 'Tracked',
+  toUrl: () => '/tracked',
+  Component: () => <TrackedPage />,
+}
+
+const chatLandingModule: ViewModule<'chat-landing'> = {
+  kind: 'chat-landing',
+  title: () => 'Ask Alice',
+  toUrl: () => '/chat',
+  Component: () => <ChatLandingPage />,
+}
+
+const workspaceListModule: ViewModule<'workspace-list'> = {
+  kind: 'workspace-list',
+  title: () => 'Workspaces',
+  toUrl: () => '/workspaces',
+  Component: () => <WorkspaceListPage />,
+}
+
+const workspaceModule: ViewModule<'workspace'> = {
+  kind: 'workspace',
+  title: (spec, ctx) => {
+    const ws = ctx.workspaces?.find((w) => w.id === spec.params.wsId)
+    const tag = ws?.tag ?? spec.params.wsId.slice(0, 8)
+    const sid = spec.params.sessionId
+    if (!sid) return tag
+    const session = ws?.sessions.find((s) => s.id === sid)
+    const name = session?.name ?? sid.slice(0, 6)
+    return `${tag} · ${name}`
+  },
+  toUrl: (spec) => {
+    const base = `/workspaces/${encodeURIComponent(spec.params.wsId)}`
+    const sid = spec.params.sessionId
+    return sid ? `${base}/s/${encodeURIComponent(sid)}` : base
+  },
+  Component: WorkspacePage,
+}
+
+const templateCatalogModule: ViewModule<'template-catalog'> = {
+  kind: 'template-catalog',
+  title: () => 'Templates',
+  toUrl: () => '/workspaces/templates',
+  Component: () => <TemplateCatalogPage />,
+}
+
+const templateDetailModule: ViewModule<'template-detail'> = {
+  kind: 'template-detail',
+  title: (spec) => `Template · ${spec.params.name}`,
+  toUrl: (spec) => `/workspaces/templates/${encodeURIComponent(spec.params.name)}`,
+  Component: ({ spec }) => <TemplateDetailPage spec={spec} />,
+}
+
+const fileViewerModule: ViewModule<'file-viewer'> = {
+  kind: 'file-viewer',
+  // Tab title = file basename; path itself shows in the page header.
+  title: (spec) => spec.params.path.split('/').filter(Boolean).pop() ?? spec.params.path,
+  toUrl: (spec) =>
+    `/workspaces/${encodeURIComponent(spec.params.wsId)}/view/${encodeURIComponent(spec.params.path)}`,
+  Component: ({ spec }) => <FileViewerPage spec={spec} />,
 }
 
 // ==================== Aggregate ====================
 
 export const VIEWS = {
-  chat: chatModule,
-  diary: diaryModule,
   portfolio: portfolioModule,
   automation: automationModule,
   news: newsModule,
   'market-list': marketListModule,
+  'market-rotation': marketRotationModule,
+  'market-board': marketBoardModule,
   'market-detail': marketDetailModule,
   settings: settingsModule,
   'uta-detail': utaDetailModule,
   dev: devModule,
-  'notifications-inbox': notificationsInboxModule,
+  inbox: inboxModule,
+  tracked: trackedModule,
+  'chat-landing': chatLandingModule,
+  'workspace-list': workspaceListModule,
+  workspace: workspaceModule,
+  'template-catalog': templateCatalogModule,
+  'template-detail': templateDetailModule,
+  'file-viewer': fileViewerModule,
 } as const satisfies { [K in ViewKind]: ViewModule<K> }
 
 /** Untyped lookup — narrow at the call site by inspecting `spec.kind`. */

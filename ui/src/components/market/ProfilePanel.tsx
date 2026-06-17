@@ -41,7 +41,7 @@ export function ProfilePanel({ symbol }: Props) {
 
   const info = [
     provider ? `Source: ${provider}` : 'Source: (unknown)',
-    'Endpoint: /api/market-data-v1/equity/profile',
+    'Endpoint: /api/market/equity/profile',
     'Company overview: sector, industry, leadership, location, headcount.',
     'Field coverage varies by provider; blank rows are fields the source doesn\u2019t report.',
   ].join('\n')
@@ -49,7 +49,7 @@ export function ProfilePanel({ symbol }: Props) {
   return (
     <Card title="Profile" info={info}>
       {loading && <div className="text-[12px] text-text-muted">Loading…</div>}
-      {error && !loading && <div className="text-[12px] text-red-400">{error}</div>}
+      {error && !loading && <div className="text-[12px] text-red">{error}</div>}
       {!loading && !error && profile && (
         <div className="flex flex-col gap-3 text-[12px]">
           <dl className="grid grid-cols-[90px_1fr] gap-y-1 gap-x-3">

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useWorkspace } from '../tabs/store'
 import { getFocusedTab, type ViewSpec } from '../tabs/types'
 import { SidebarRow } from './SidebarRow'
@@ -5,27 +6,25 @@ import { SidebarRow } from './SidebarRow'
 type DevTab = Extract<ViewSpec, { kind: 'dev' }>['params']['tab']
 
 interface CategoryItem {
-  label: string
+  labelKey: string
   tab: DevTab
 }
 
-const CATEGORIES: CategoryItem[] = [
-  { label: 'Connectors', tab: 'connectors' },
-  { label: 'Tools', tab: 'tools' },
-  { label: 'Sessions', tab: 'sessions' },
-  { label: 'Snapshots', tab: 'snapshots' },
-  { label: 'Logs', tab: 'logs' },
-  { label: 'Simulator', tab: 'simulator' },
-]
+const CATEGORIES = [
+  { labelKey: 'common.tools', tab: 'tools' },
+  { labelKey: 'dev.snapshots', tab: 'snapshots' },
+  { labelKey: 'common.logs', tab: 'logs' },
+  { labelKey: 'simulator.title', tab: 'simulator' },
+] as const
 
 /**
- * Dev sidebar — five sub-pages, click opens (or focuses) the
- * corresponding dev tab. Active highlight is driven by the focused tab's
- * spec.
+ * Dev sidebar — click opens (or focuses) the corresponding dev tab. Active
+ * highlight is driven by the focused tab's spec.
  */
 export function DevCategoryList() {
   const focused = useWorkspace((state) => getFocusedTab(state)?.spec)
   const openOrFocus = useWorkspace((state) => state.openOrFocus)
+  const { t } = useTranslation()
 
   return (
     <div className="py-0.5">
@@ -34,7 +33,7 @@ export function DevCategoryList() {
         return (
           <SidebarRow
             key={item.tab}
-            label={item.label}
+            label={t(item.labelKey)}
             active={active}
             onClick={() => openOrFocus({ kind: 'dev', params: { tab: item.tab } })}
           />

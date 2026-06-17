@@ -3,7 +3,17 @@ import { randomBytes } from 'node:crypto'
 import { SessionStore } from '../../core/session.js'
 import { readWebSubchannels, writeWebSubchannels } from '../../core/config.js'
 import type { WebChannel } from '../../core/types.js'
-import type { SSEClient } from './chat.js'
+
+/**
+ * SSE client handle for a chat sub-channel's event stream. Defined here
+ * (relocated from the deleted chat route module) because the web
+ * sub-channels surface is its only remaining consumer. Slated to be
+ * removed wholesale when the legacy channel stack is retired.
+ */
+export interface SSEClient {
+  id: string
+  send: (data: string) => void
+}
 
 interface ChannelsDeps {
   sessions: Map<string, SessionStore>

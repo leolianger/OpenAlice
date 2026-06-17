@@ -8,6 +8,7 @@
 
 import { useState } from 'react'
 import { Section } from '../../components/form'
+import { formatRelativeTime } from '../../lib/intl'
 import type { SimulatorEvent } from './useSimulatorState'
 
 const COLLAPSED_COUNT = 5
@@ -17,17 +18,9 @@ function formatTime(ts: number): string {
   return d.toTimeString().slice(0, 8)
 }
 
-function relativeTime(ts: number, now: number): string {
-  const sec = Math.max(0, Math.round((now - ts) / 1000))
-  if (sec < 60) return `${sec}s ago`
-  if (sec < 3600) return `${Math.round(sec / 60)}m ago`
-  return `${Math.round(sec / 3600)}h ago`
-}
-
 export function EventLog({ events }: { events: SimulatorEvent[] }) {
   const [expanded, setExpanded] = useState(false)
   const visible = expanded ? events : events.slice(0, COLLAPSED_COUNT)
-  const now = Date.now()
 
   return (
     <Section
@@ -43,7 +36,7 @@ export function EventLog({ events }: { events: SimulatorEvent[] }) {
               {visible.map((ev) => (
                 <tr key={ev.id} className="text-text">
                   <td className="py-0.5 pr-3 font-mono text-[11px] text-text-muted/80 w-20">{formatTime(ev.ts)}</td>
-                  <td className="py-0.5 pr-3 text-text-muted/60 text-[11px] w-20">{relativeTime(ev.ts, now)}</td>
+                  <td className="py-0.5 pr-3 text-text-muted/60 text-[11px] w-20">{formatRelativeTime(ev.ts)}</td>
                   <td className="py-0.5 pr-3">
                     <span className={ev.status === 'err' ? 'text-red' : 'text-text'}>{ev.label}</span>
                     {ev.detail && (

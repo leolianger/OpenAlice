@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 90
     env:
       # Edit this when publishing a new image; workflow pushes only this tag.
-      DOCKER_IMAGE_TAG: 0.10.0-beta.0
+      DOCKER_IMAGE_TAG: 0.50.0-beta.1
     permissions:
       contents: read
 

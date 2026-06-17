@@ -1,5 +1,6 @@
 import { useState, type MouseEvent, type WheelEvent } from 'react'
-import { useChannels } from '../contexts/ChannelsContext'
+import { X } from 'lucide-react'
+import { useWorkspaces } from '../contexts/WorkspacesContext'
 import { useWorkspace } from '../tabs/store'
 import { getView } from '../tabs/registry'
 import { ContextMenu, type ContextMenuItem } from './ContextMenu'
@@ -20,7 +21,7 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu'
  * would just be noise.
  */
 export function TabStrip() {
-  const { channels } = useChannels()
+  const { workspaces } = useWorkspaces()
   const tabIds = useWorkspace((state) =>
     state.tree.kind === 'leaf' ? state.tree.group.tabIds : [],
   )
@@ -94,13 +95,13 @@ export function TabStrip() {
     <>
       <div
         onWheel={handleWheel}
-        className="scrollbar-hide hidden md:flex shrink-0 h-9 bg-bg-secondary border-b border-border overflow-x-auto"
+        className="scrollbar-hide hidden md:flex shrink-0 h-10 bg-bg-secondary/95 border-b border-border/80 overflow-x-auto"
       >
         {tabIds.map((id) => {
           const tab = tabsMap[id]
           if (!tab) return null
           const view = getView(tab.spec.kind)
-          const title = view.title(tab.spec as never, { channels })
+          const title = view.title(tab.spec as never, { workspaces })
           const isActive = id === activeTabId
           return (
             <TabButton
@@ -149,10 +150,10 @@ function TabButton({ title, active, onSelect, onClose, onContextMenu }: TabButto
         }
       }}
       onContextMenu={onContextMenu}
-      className={`group flex items-center gap-2 pl-3 pr-2 h-full text-[13px] cursor-pointer border-r border-border transition-colors ${
+      className={`group flex items-center gap-2 pl-3 pr-2 h-full text-[13px] cursor-pointer border-r border-border/80 transition-colors ${
         active
-          ? 'bg-bg text-text'
-          : 'text-text-muted hover:text-text hover:bg-bg-tertiary/40'
+          ? 'bg-bg-tertiary text-text'
+          : 'text-text-muted hover:text-text hover:bg-overlay'
       }`}
     >
       <span className="truncate max-w-[200px]">{title}</span>
@@ -162,12 +163,10 @@ function TabButton({ title, active, onSelect, onClose, onContextMenu }: TabButto
           e.stopPropagation()
           onClose()
         }}
-        className="w-4 h-4 rounded flex items-center justify-center text-text-muted/60 hover:text-text hover:bg-bg-tertiary"
+        className="w-4 h-4 rounded flex items-center justify-center text-text-muted/60 hover:text-text hover:bg-overlay-strong"
         aria-label={`Close ${title}`}
       >
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-          <path d="M18 6L6 18M6 6l12 12" />
-        </svg>
+        <X size={11} strokeWidth={2.5} />
       </button>
     </div>
   )

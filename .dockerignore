@@ -1,16 +1,36 @@
-node_modules
-.git
+# Keep the build context lean. Anything not strictly needed for `pnpm
+# install` + `pnpm build` shouldn't be sent to the daemon — speeds up
+# every COPY and avoids accidentally baking your local state into the
+# image.
+
+# Per-machine state
+data
+logs
+*.log
+
+# Build artifacts (we rebuild inside the image)
 dist
 **/dist
+node_modules
 **/node_modules
-*.log
-.env
-.env.*
+ui/.vite
+electron/dist
+
+# Editor / IDE
+.vscode
+.idea
 .DS_Store
-docs
+
+# VCS + CI
+.git
 .github
+
+# Test scratch / browser fixtures
+.playwright-mcp
 coverage
-.ui
-*.spec.ts
-*.spec.tsx
-**/__tests__
+.nyc_output
+
+# Docker artifacts themselves (don't ship the recipe into the recipe)
+Dockerfile
+docker-compose.yml
+.dockerignore

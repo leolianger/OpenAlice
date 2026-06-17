@@ -1,0 +1,318 @@
+/**
+ * "Ask Alice" secondary sidebar — your chat history.
+ *
+ * Reads as a conversation list: a prominent "New chat" action on top (opens the
+ * Ask Alice composer), then chat workspaces newest-first. Each workspace is a
+ * day's bucket — daily ones (`chat-jun15`) are relabelled Today / Yesterday /
+ * "Jun 14" so the list reads like chat history; user-named ones (`nvda-thesis`)
+ * keep their tag. Sessions hang underneath as the day's individual
+ * conversations, resumable on click.
+ *
+ * Named-workspace creation (a custom tag) lives in the Workspaces activity —
+ * this surface is for chatting, not workspace management.
+ */
+
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useTranslation } from 'react-i18next'
+import { ChevronDown, ChevronRight, FolderPlus, Plus, Settings as SettingsIcon, X } from 'lucide-react'
+
+import { useWorkspaces } from '../../contexts/WorkspacesContext'
+import { useWorkspace } from '../../tabs/store'
+import { getFocusedTab } from '../../tabs/types'
+import { ConfirmDialog } from '../ConfirmDialog'
+import { deleteWorkspace, type SessionRecord, type Workspace } from './api'
+import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
+import { SessionRow } from './Sidebar'
+
+const CHAT_TEMPLATE = 'chat'
+
+/** Auto-generated daily tag shape (`chat-jun15`) — these get a friendly date label. */
+const DAILY_TAG_RE = /^chat-[a-z]{3}\d{1,2}$/
+
+/** Friendly label for a chat workspace: Today / Yesterday / "Jun 14" for daily
+ *  buckets, the raw tag for user-named workspaces. */
+function chatLabel(w: Workspace, todayLabel: string, yesterdayLabel: string): string {
+  if (!DAILY_TAG_RE.test(w.tag)) return w.tag
+  const created = new Date(w.createdAt)
+  if (Number.isNaN(created.getTime())) return w.tag
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const diffDays = Math.round((startOfDay(new Date()) - startOfDay(created)) / 86_400_000)
+  if (diffDays <= 0) return todayLabel
+  if (diffDays === 1) return yesterdayLabel
+  return created.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+export function ChatWorkspaceSection(): ReactElement | null {
+  const { t } = useTranslation()
+  const ctx = useWorkspaces()
+  const focused = useWorkspace((s) => getFocusedTab(s)?.spec)
+  const openOrFocus = useWorkspace((s) => s.openOrFocus)
+
+  const chatWorkspaces = useMemo(
+    () => ctx.workspaces.filter((w) => w.template === CHAT_TEMPLATE),
+    [ctx.workspaces],
+  )
+
+  const isWsFocus = focused?.kind === 'workspace'
+  const selection = isWsFocus
+    ? { wsId: focused.params.wsId, sessionId: focused.params.sessionId ?? null }
+    : null
+
+  const chatTemplate = ctx.templates.find((tpl) => tpl.name === CHAT_TEMPLATE)
+  const [pendingDelete, setPendingDelete] = useState<Workspace | null>(null)
+  const [showCreate, setShowCreate] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  // Close the "more" menu on an outside click.
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [menuOpen])
+
+  const handleConfirmDelete = async (): Promise<void> => {
+    if (!pendingDelete) return
+    try {
+      const ok = await deleteWorkspace(pendingDelete.id)
+      if (ok) ctx.refresh()
+    } finally {
+      setPendingDelete(null)
+    }
+  }
+
+  if (!chatTemplate) return null
+
+  const todayLabel = t('chat.today')
+  const yesterdayLabel = t('chat.yesterday')
+
+  return (
+    <>
+      {/* Primary action: New chat (the Ask Alice composer). The split caret
+          keeps the power-user "New workspace" (named, custom tag) reachable. */}
+      <div className="px-2 pt-2 pb-1.5">
+        <div className="flex items-stretch gap-1">
+          <button
+            type="button"
+            onClick={() => openOrFocus({ kind: 'chat-landing', params: {} })}
+            className="flex-1 min-w-0 flex items-center gap-2 px-3 py-2 rounded-lg border border-border/60 bg-bg-tertiary/30 text-[13px] font-medium text-text-muted transition-colors hover:text-text hover:border-accent/50 hover:bg-bg-tertiary/60"
+          >
+            <Plus size={15} strokeWidth={2.25} className="shrink-0" />
+            <span className="truncate">{t('chat.newChat')}</span>
+          </button>
+          <div ref={menuRef} className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => setMenuOpen((o) => !o)}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              aria-label={t('chat.moreOptions')}
+              title={t('chat.moreOptions')}
+              className={`h-full px-2 flex items-center justify-center rounded-lg border transition-colors ${
+                menuOpen
+                  ? 'border-accent/50 bg-bg-tertiary/60 text-text'
+                  : 'border-border/60 bg-bg-tertiary/30 text-text-muted hover:text-text hover:border-accent/50 hover:bg-bg-tertiary/60'
+              }`}
+            >
+              <ChevronDown size={14} strokeWidth={2.25} />
+            </button>
+            {menuOpen && (
+              <div
+                role="menu"
+                className="absolute right-0 top-full mt-1 min-w-[170px] py-1 bg-bg-secondary border border-border/70 rounded-lg shadow-lg z-10"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    setShowCreate(true)
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-left text-text transition-colors hover:bg-bg-tertiary"
+                >
+                  <FolderPlus size={14} strokeWidth={2} className="shrink-0 text-text-muted" />
+                  <span>{t('chat.newWorkspace')}</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {showCreate && (
+        <CreateWorkspaceDialog
+          templates={ctx.templates}
+          presetTemplate={CHAT_TEMPLATE}
+          onCreated={(workspace) => {
+            ctx.refresh()
+            openOrFocus({ kind: 'workspace', params: { wsId: workspace.id } })
+          }}
+          onClose={() => setShowCreate(false)}
+        />
+      )}
+
+      <ul className="py-0.5">
+        {chatWorkspaces.length === 0 && !ctx.listError && (
+          <li className="px-3 py-2 text-[12px] text-text-muted/60">{t('chat.noChatWorkspacesYet')}</li>
+        )}
+        {ctx.listError && <li className="px-3 py-1 text-[11px] text-red">{ctx.listError}</li>}
+        {chatWorkspaces.map((w) => (
+          <ChatWorkspaceRow
+            key={w.id}
+            workspace={w}
+            label={chatLabel(w, todayLabel, yesterdayLabel)}
+            selection={selection}
+            onOpen={() => {
+              const recent = mostRecentSession(w.sessions)
+              openOrFocus({
+                kind: 'workspace',
+                params: recent ? { wsId: w.id, sessionId: recent.id } : { wsId: w.id },
+              })
+            }}
+            onOpenSession={(sid) =>
+              openOrFocus({ kind: 'workspace', params: { wsId: w.id, sessionId: sid } })
+            }
+            onPauseSession={(sid) => void ctx.pauseSession(w.id, sid)}
+            onResumeSession={(sid) => void ctx.resumeSession(w.id, sid)}
+            onDeleteSession={(sid) => ctx.requestDeleteSession(w.id, sid)}
+            onConfigure={() => ctx.openAgentConfig(w.id)}
+            onDelete={() => setPendingDelete(w)}
+          />
+        ))}
+      </ul>
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={t('chat.deleteWorkspaceTitle')}
+          message={t('chat.deleteWorkspaceMessage', { tag: pendingDelete.tag })}
+          confirmLabel={t('common.delete')}
+          onConfirm={handleConfirmDelete}
+          onClose={() => setPendingDelete(null)}
+        />
+      )}
+    </>
+  )
+}
+
+function mostRecentSession(sessions: readonly SessionRecord[]): SessionRecord | undefined {
+  if (sessions.length === 0) return undefined
+  return [...sessions].sort(
+    (a, b) => new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime(),
+  )[0]
+}
+
+interface ChatWorkspaceRowProps {
+  workspace: Workspace
+  label: string
+  selection: { wsId: string; sessionId: string | null } | null
+  onOpen: () => void
+  onOpenSession: (sid: string) => void
+  onPauseSession: (sid: string) => void
+  onResumeSession: (sid: string) => void
+  onDeleteSession: (sid: string) => void
+  onConfigure: () => void
+  onDelete: () => void
+}
+
+function ChatWorkspaceRow(props: ChatWorkspaceRowProps): ReactElement {
+  const { t } = useTranslation()
+  const w = props.workspace
+  const hasRunning = w.sessions.some((s) => s.state === 'running')
+  const [expanded, setExpanded] = useState(true)
+  const isSelected = props.selection?.wsId === w.id && props.selection.sessionId === null
+
+  const statusClass = hasRunning
+    ? 'bg-green'
+    : w.sessions.length > 0
+      ? 'bg-text-muted/40'
+      : 'border border-border'
+
+  return (
+    <li className="group relative">
+      <div
+        className={`flex items-center gap-1 pl-2 pr-2 py-1 text-[13px] cursor-pointer transition-colors ${
+          isSelected ? 'bg-bg-tertiary text-text' : 'text-text hover:bg-bg-tertiary/50'
+        }`}
+      >
+        {isSelected && (
+          <span aria-hidden="true" className="absolute left-0 top-0 bottom-0 w-[2px] bg-accent" />
+        )}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            setExpanded((v) => !v)
+          }}
+          className="w-4 h-5 flex items-center justify-center text-text-muted/50 hover:text-text shrink-0"
+          aria-label={expanded ? t('chat.collapseSessions') : t('chat.expandSessions')}
+          title={expanded ? t('chat.collapseSessions') : t('chat.expandSessions')}
+        >
+          {expanded ? (
+            <ChevronDown size={12} strokeWidth={2.25} />
+          ) : (
+            <ChevronRight size={12} strokeWidth={2.25} />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={props.onOpen}
+          className="flex-1 min-w-0 flex items-center gap-2 text-left"
+        >
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusClass}`} aria-hidden="true" />
+          <span className="truncate font-medium" title={w.tag}>
+            {props.label}
+          </span>
+          {w.sessions.length > 0 && (
+            <span className="text-[11px] text-text-muted/45 tabular-nums shrink-0">
+              {w.sessions.length}
+            </span>
+          )}
+        </button>
+        <span className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              props.onConfigure()
+            }}
+            className="w-5 h-5 rounded flex items-center justify-center text-text-muted hover:text-text hover:bg-bg-secondary"
+            title={t('settings.category.aiProvider')}
+            aria-label={t('settings.category.aiProvider')}
+          >
+            <SettingsIcon size={12} strokeWidth={2} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              props.onDelete()
+            }}
+            className="w-5 h-5 rounded flex items-center justify-center text-text-muted hover:text-red hover:bg-red/10"
+            title={t('chat.deleteWorkspace')}
+            aria-label={t('chat.deleteWorkspace')}
+          >
+            <X size={12} strokeWidth={2.5} />
+          </button>
+        </span>
+      </div>
+      {expanded && w.sessions.length > 0 && (
+        <ul className="sidebar-children chat-ws-children-list">
+          {w.sessions.map((s) => (
+            <SessionRow
+              key={s.id}
+              session={s}
+              isActive={props.selection?.sessionId === s.id}
+              onSelect={() => props.onOpenSession(s.id)}
+              onPause={() => props.onPauseSession(s.id)}
+              onResume={() => props.onResumeSession(s.id)}
+              onDelete={() => props.onDeleteSession(s.id)}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  )
+}

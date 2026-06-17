@@ -9,7 +9,13 @@
  * Note: these accept either `number` or numeric `string` (the trading API
  * serializes `Decimal` as string to avoid IEEE-754 rounding artifacts in
  * money math). NaN / non-finite inputs render as "—" — loud, never silent.
+ *
+ * Locale: grouping/decimal rendering follows the app locale via
+ * `getIntlLocale()` (en-US until the locale store sets otherwise). The
+ * CURRENCY_SYMBOLS map below is broker-domain currency identity, not a locale
+ * concern — it stays fixed regardless of language.
  */
+import { getIntlLocale } from './intl'
 
 export const CURRENCY_SYMBOLS: Record<string, string> = {
   USD: '$', HKD: 'HK$', EUR: '€', GBP: '£', JPY: '¥',
@@ -20,6 +26,15 @@ export const CURRENCY_SYMBOLS: Record<string, string> = {
 export function currencySymbol(currency?: string): string {
   if (!currency) return '$'
   return CURRENCY_SYMBOLS[currency.toUpperCase()] ?? `${currency} `
+}
+
+// Defense layer: if the backend's OrderHelper.toWire ever forgets to strip
+// IBKR's UNSET_DECIMAL = 2^127-1, callers can detect the sentinel string
+// shape and treat it as "no value" instead of rendering "$1.7e38".
+export const UNSET_DECIMAL_STR = '1.70141183460469231731687303715884105727e+38'
+
+export function isUnsetDecimal(v: number | string | undefined | null): boolean {
+  return v === UNSET_DECIMAL_STR || v === Number(UNSET_DECIMAL_STR)
 }
 
 function toFiniteNumber(input: number | string | undefined | null): number | null {
@@ -33,7 +48,7 @@ export function fmt(input: number | string | undefined | null, currency?: string
   const n = toFiniteNumber(input)
   if (n == null) return '—'
   const sym = currencySymbol(currency)
-  return `${sym}${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  return `${sym}${n.toLocaleString(getIntlLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 /** "+$1,234.56" / "-$1,234.56". `0` renders as "+$0.00" (intentional —
@@ -44,7 +59,7 @@ export function fmtPnl(input: number | string | undefined | null, currency?: str
   const sym = currencySymbol(currency)
   const sign = n >= 0 ? '+' : '-'
   const abs = Math.abs(n)
-  return `${sign}${sym}${abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  return `${sign}${sym}${abs.toLocaleString(getIntlLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 /** "1,234.56" or "0.0123" for sub-unit values; for share/contract counts. */
@@ -52,7 +67,7 @@ export function fmtNum(input: number | string | undefined | null): string {
   const n = toFiniteNumber(input)
   if (n == null) return '—'
   return Math.abs(n) >= 1
-    ? n.toLocaleString('en-US', { maximumFractionDigits: 4 })
+    ? n.toLocaleString(getIntlLocale(), { maximumFractionDigits: 4 })
     : n.toPrecision(4)
 }
 

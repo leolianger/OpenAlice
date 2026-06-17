@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { api, type EventLogEntry, type ToolCallRecord } from '../api'
+import { getIntlLocale } from '../lib/intl'
 
 // ==================== Helpers ====================
 
 function formatDateTime(ts: number): string {
   const d = new Date(ts)
-  const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-  const time = d.toLocaleTimeString('en-US', { hour12: false })
+  const date = d.toLocaleDateString(getIntlLocale(), { month: 'short', day: 'numeric' })
+  const time = d.toLocaleTimeString(getIntlLocale(), { hour12: false })
   return `${date} ${time}`
 }
 

@@ -1,3 +1,22 @@
+// ==================== Version / Update awareness ====================
+
+export interface VersionInfo {
+  /** App version from package.json. */
+  current: string
+  /** Latest release tag from GitHub, or null if fetch failed / no releases. */
+  latest: string | null
+  /** True when latest > current (semver). */
+  hasUpdate: boolean
+  /** GitHub release page URL — UI links to this for changelog. */
+  releaseUrl: string | null
+  /** Markdown release body. */
+  releaseNotes: string | null
+  /** ISO timestamp when the release was published. */
+  publishedAt: string | null
+  /** Non-null when fetch failed (rate limit, network, etc.). */
+  error: string | null
+}
+
 // ==================== AI Provider Profiles ====================
 
 export type AIBackend = 'agent-sdk' | 'codex' | 'vercel-ai-sdk'
@@ -10,9 +29,53 @@ export interface Profile {
   provider?: string   // vercel-ai-sdk only
   baseUrl?: string
   apiKey?: string
+  /** Pointer into the credentials map. Set eagerly by writeProfile. */
+  credentialSlug?: string
+}
+
+// ==================== AI Provider Credentials ====================
+
+export type CredentialVendor =
+  | 'anthropic' | 'openai' | 'google'
+  | 'minimax' | 'glm' | 'kimi' | 'deepseek'
+  | 'custom'
+
+export type CredentialAuthType = 'api-key' | 'subscription'
+
+export interface Credential {
+  vendor: CredentialVendor
+  authType: CredentialAuthType
+  apiKey?: string
+  baseUrl?: string
+}
+
+// ==================== SDK Adapters ====================
+
+export type SdkAdapterId =
+  | 'agent-sdk' | 'codex'
+  | 'vercel-anthropic' | 'vercel-openai' | 'vercel-google'
+
+export interface SdkAdapterInfo {
+  id: SdkAdapterId
+  label: string
+  description: string
+  presets: Array<{
+    presetId: string
+    presetLabel: string
+    isTestDefault: boolean
+  }>
 }
 
 // ==================== AI Provider Presets ====================
+
+export type WireShape = 'anthropic' | 'openai-chat' | 'openai-responses'
+
+/** A region + the per-wire-shape endpoints it offers. */
+export interface SerializedRegion {
+  id: string
+  label: string
+  wires: Partial<Record<WireShape, string>>
+}
 
 export interface Preset {
   id: string
@@ -22,6 +85,9 @@ export interface Preset {
   hint?: string
   defaultName: string
   schema: JsonSchema
+  /** Regions × their per-shape endpoints — the form picks a region; the
+   *  credential captures that region's whole wires map (its capabilities). */
+  regions?: SerializedRegion[]
 }
 
 /** Subset of JSON Schema types we use for form rendering. */
@@ -98,23 +164,28 @@ export interface AppConfig {
   engine: Record<string, unknown>
   agent: { evolutionMode: boolean; claudeCode: Record<string, unknown> }
   compaction: { maxContextTokens: number; maxOutputTokens: number }
-  heartbeat: {
-    enabled: boolean
-    every: string
-    prompt: string
-    activeHours: { start: string; end: string; timezone: string } | null
-  }
   snapshot: {
     enabled: boolean
     every: string
   }
+  mcp: McpConfig
   connectors: ConnectorsConfig
   [key: string]: unknown
 }
 
+/**
+ * MCP server config — lives at top-level of AppConfig (NOT under
+ * connectors:) because the MCP server exports OpenAlice's ToolCenter
+ * to external clients, not because it's a chat-input surface.
+ * `connectors.mcpAsk` is the chat-shaped MCP-as-input flavour and
+ * stays under connectors.
+ */
+export interface McpConfig {
+  port: number
+}
+
 export interface ConnectorsConfig {
   web: { port: number }
-  mcp: { port: number }
   mcpAsk: { enabled: boolean; port?: number }
   telegram: {
     enabled: boolean
@@ -219,6 +290,10 @@ export interface CronJob {
   enabled: boolean
   schedule: CronSchedule
   payload: string
+  /** Target workspace the job's prompt runs in, headless. */
+  workspaceId?: string
+  /** Which enabled CLI agent runs it — claude / codex / pi / opencode. */
+  agent?: string
   state: CronJobState
   createdAt: number
 }
@@ -227,8 +302,16 @@ export interface CronJob {
 
 export type BrokerHealth = 'healthy' | 'degraded' | 'offline'
 
+/** Capability ladder: 'down' < 'connected' (transport + public data) <
+ *  'readable' (private account read). Mirrors the UTA-protocol type. */
+export type UTAReach = 'down' | 'connected' | 'readable'
+/** What an account is for: keyless data source / read-only / writable. */
+export type UTATier = 'data' | 'account' | 'trading'
+
 export interface BrokerHealthInfo {
   status: BrokerHealth
+  reach: UTAReach
+  tier: UTATier
   consecutiveFailures: number
   lastError?: string
   lastSuccessAt?: string
@@ -250,15 +333,22 @@ export interface TradingAccount {
   label: string
 }
 
+/**
+ * Mirrors `AccountInfo` in packages/uta-protocol/src/types/broker.ts — keep
+ * the two in lockstep. The contract is the IBKR superset: brokers that don't
+ * report a field omit it (e.g. Alpaca has no realizedPnL; CCXT venues often
+ * have no buyingPower). The UI must omit those rows, never fabricate zeros.
+ */
 export interface AccountInfo {
   baseCurrency: string
   netLiquidation: string
   totalCashValue: string
   unrealizedPnL: string
-  realizedPnL: string
+  realizedPnL?: string
   buyingPower?: string
   initMarginReq?: string
   maintMarginReq?: string
+  dayTradesRemaining?: number
 }
 
 export interface Position {
@@ -330,6 +420,74 @@ export interface WalletPushResult {
   operationCount: number
   submitted: Array<{ action: string; success: boolean; orderId?: string; status: string; error?: string }>
   rejected: Array<{ action: string; success: boolean; error?: string; status: string }>
+}
+
+// ==================== Order / Trade History ====================
+//
+// Hand-mirrors packages/uta-protocol/src/types/history.ts — the UI does not
+// import uta-protocol, so keep these in lockstep with the wire types.
+
+/** Compact contract identity for history rows — IBKR-superset fields. */
+export interface HistoryContract {
+  aliceId?: string
+  symbol?: string
+  localSymbol?: string
+  secType?: string
+  currency?: string
+  exchange?: string
+  /** OPT/FOP/FUT: contract month or expiry (IBKR lastTradeDateOrContractMonth). */
+  expiry?: string
+  /** OPT/FOP: strike price (string — Decimal-safe). */
+  strike?: string
+  /** OPT/FOP: 'C' | 'P' (normalized). */
+  right?: string
+  multiplier?: string
+}
+
+export type OrderHistoryStatus = 'submitted' | 'filled' | 'cancelled' | 'rejected' | 'user-rejected'
+
+export type OrderHistorySource = 'alice' | 'external'
+
+export interface OrderHistoryEntry {
+  /** Broker order id (absent for rejected-before-submit). */
+  orderId?: string
+  /** When the order entered the log (push/observe time, ISO). */
+  timestamp: string
+  /** When the terminal transition was recorded, if any (sync/cancel time, ISO). */
+  resolvedAt?: string
+  contract: HistoryContract
+  side: 'BUY' | 'SELL'
+  orderType?: string
+  quantity?: string
+  limitPrice?: string
+  stopPrice?: string
+  status: OrderHistoryStatus
+  filledQty?: string
+  avgFillPrice?: string
+  /** 'external' = observed on the broker, not placed through Alice. */
+  source: OrderHistorySource
+  /** Commit that introduced the order — the audit pointer. */
+  commitHash: string
+  /** Commit message (user intent for Alice orders; [observed] for external). */
+  message: string
+  error?: string
+}
+
+export type TradeHistorySource = 'order' | 'external' | 'reconcile'
+
+export interface TradeHistoryEntry {
+  /** Fill record time (ISO) — push time for immediate fills, sync time otherwise. */
+  timestamp: string
+  orderId?: string
+  contract: HistoryContract
+  side: 'BUY' | 'SELL'
+  quantity: string
+  price: string
+  /** quantity × price × multiplier (string — Decimal-safe). */
+  value: string
+  /** 'reconcile' = balance drift folded in at observed price, not a real fill record. */
+  source: TradeHistorySource
+  commitHash: string
 }
 
 // ==================== Tool Call Log ====================

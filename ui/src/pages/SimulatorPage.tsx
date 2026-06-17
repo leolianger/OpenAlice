@@ -19,6 +19,7 @@
  */
 
 import { useCallback } from 'react'
+import { getIntlLocale } from '../lib/intl'
 import { Spinner, EmptyState } from '../components/StateViews'
 import { useSimulatorState } from './simulator/useSimulatorState'
 import { CreateSimulatorSection } from './simulator/CreateSimulatorSection'
@@ -121,7 +122,7 @@ function TopBar({ utas, selectedId, onSelect, cash, onRefresh }: {
       {cash !== undefined && (
         <span className="ml-auto text-[12px] text-text-muted uppercase tracking-wide">
           Cash <span className="font-mono text-text text-sm normal-case ml-1.5">
-            ${Number(cash).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            ${Number(cash).toLocaleString(getIntlLocale(), { minimumFractionDigits: 2 })}
           </span>
         </span>
       )}

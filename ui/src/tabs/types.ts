@@ -14,17 +14,24 @@
  */
 
 export type ViewSpec =
-  | { kind: 'chat';           params: { channelId: string } }
-  | { kind: 'diary';          params: Record<string, never> }
+  | { kind: 'workspace-list'; params: Record<string, never> }
+  | { kind: 'workspace';      params: { wsId: string; sessionId?: string } }
+  | { kind: 'template-catalog'; params: Record<string, never> }
+  | { kind: 'template-detail';  params: { name: string } }
   | { kind: 'portfolio';      params: Record<string, never> }
-  | { kind: 'automation';     params: { section: 'flow' | 'heartbeat' | 'cron' | 'webhook' } }
+  | { kind: 'automation';     params: { section: 'flow' | 'cron' | 'webhook' | 'runs' } }
   | { kind: 'news';           params: Record<string, never> }
   | { kind: 'market-list';    params: Record<string, never> }
-  | { kind: 'market-detail';  params: { assetClass: 'equity' | 'crypto' | 'currency' | 'commodity'; symbol: string } }
-  | { kind: 'settings';       params: { category: 'general' | 'ai-provider' | 'trading' | 'connectors' | 'market-data' | 'news-collector' } }
+  | { kind: 'market-rotation'; params: Record<string, never> }
+  | { kind: 'market-board';   params: { board: 'movers' | 'calendar' | 'macro' | 'term-structure' | 'global-macro' | 'shipping' | 'fed' } }
+  | { kind: 'market-detail';  params: { assetClass: 'equity' | 'crypto' | 'currency' | 'commodity'; symbol: string; source?: string } }
+  | { kind: 'settings';       params: { category: 'general' | 'ai-provider' | 'trading' | 'mcp' | 'market-data' | 'news-collector' } }
   | { kind: 'uta-detail';     params: { id: string } }
-  | { kind: 'dev';            params: { tab: 'connectors' | 'tools' | 'sessions' | 'snapshots' | 'logs' | 'simulator' } }
-  | { kind: 'notifications-inbox'; params: Record<string, never> }
+  | { kind: 'dev';            params: { tab: 'tools' | 'snapshots' | 'logs' | 'simulator' } }
+  | { kind: 'inbox';               params: Record<string, never> }
+  | { kind: 'tracked';             params: Record<string, never> }
+  | { kind: 'chat-landing';        params: Record<string, never> }
+  | { kind: 'file-viewer';         params: { wsId: string; path: string } }
 
 export type ViewKind = ViewSpec['kind']
 
@@ -40,6 +47,9 @@ export type ViewKind = ViewSpec['kind']
  */
 export type ActivitySection =
   | 'chat'
+  | 'inbox'
+  | 'tracked'
+  | 'workspaces'
   | 'trading-as-git'
   | 'settings'
   | 'dev'
@@ -47,7 +57,6 @@ export type ActivitySection =
   | 'portfolio'
   | 'automation'
   | 'news'
-  | 'diary'
 
 export interface Tab {
   id: string

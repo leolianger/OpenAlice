@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
-import { Navigate, Route, Routes, useParams } from 'react-router-dom'
+import { Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom'
 import { useWorkspace } from './store'
-import { specEquals, type ViewSpec } from './types'
+import { specEquals, type ActivitySection, type ViewSpec } from './types'
 import { getView } from './registry'
 
 /**
@@ -26,18 +26,27 @@ export function UrlAdopter() {
   return (
     <>
       <Routes>
-        {/* Root → default chat */}
+        {/* Root → Ask Alice. An AI product should open on how-to-use-it (the
+            chat front door), not an information summary (Inbox is task sync, à
+            la Linear — but Linear's comms live in Slack; ours live here). */}
         <Route path="/" element={<Navigate to="/chat" replace />} />
 
         {/* Activities */}
-        <Route path="/chat" element={<AdoptStatic spec={{ kind: 'chat', params: { channelId: 'default' } }} />} />
-        <Route path="/chat/:channelId" element={<AdoptChat />} />
-        <Route path="/diary" element={<AdoptStatic spec={{ kind: 'diary', params: {} }} />} />
+        {/* /chat → the "Ask Alice" quick-chat landing (composer). Legacy
+            /chat/:channelId (the retired traditional-chat channels) still
+            redirects to Inbox so stale bookmarks land on a live surface. */}
+        <Route path="/chat" element={<AdoptStatic spec={{ kind: 'chat-landing', params: {} }} />} />
+        <Route path="/chat/:channelId" element={<Navigate to="/inbox" replace />} />
         <Route path="/portfolio" element={<AdoptStatic spec={{ kind: 'portfolio', params: {} }} />} />
         <Route path="/automation" element={<Navigate to="/automation/flow" replace />} />
         <Route path="/automation/:section" element={<AdoptAutomation />} />
         <Route path="/news" element={<AdoptStatic spec={{ kind: 'news', params: {} }} />} />
         <Route path="/market" element={<AdoptStatic spec={{ kind: 'market-list', params: {} }} />} />
+        <Route path="/market/rotation" element={<AdoptStatic spec={{ kind: 'market-rotation', params: {} }} />} />
+        {/* Static `boards` segment outranks /market/:assetClass/:symbol in
+            react-router's specificity scoring, so order here doesn't matter —
+            but keep it above the dynamic route for readability. */}
+        <Route path="/market/boards/:board" element={<AdoptMarketBoard />} />
         <Route path="/market/:assetClass/:symbol" element={<AdoptMarketDetail />} />
         {/* /trading-as-git no longer creates a tab — sidebar-only activity. */}
         <Route path="/trading-as-git" element={<SetSidebarOnly section="trading-as-git" />} />
@@ -46,35 +55,53 @@ export function UrlAdopter() {
         <Route path="/settings" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'general' } }} />} />
         <Route path="/settings/ai-provider" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'ai-provider' } }} />} />
         <Route path="/settings/trading" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'trading' } }} />} />
-        <Route path="/settings/connectors" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'connectors' } }} />} />
+        <Route path="/settings/mcp" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'mcp' } }} />} />
         <Route path="/settings/market-data" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'market-data' } }} />} />
         <Route path="/settings/news-collector" element={<AdoptStatic spec={{ kind: 'settings', params: { category: 'news-collector' } }} />} />
         <Route path="/settings/uta/:id" element={<AdoptUtaDetail />} />
 
         {/* Dev */}
-        <Route path="/dev" element={<Navigate to="/dev/connectors" replace />} />
+        <Route path="/dev" element={<Navigate to="/dev/tools" replace />} />
         <Route path="/dev/:tab" element={<AdoptDev />} />
 
-        {/* Notifications inbox */}
-        <Route path="/notifications" element={<AdoptStatic spec={{ kind: 'notifications-inbox', params: {} }} />} />
+        {/* Legacy /notifications (retired NotificationsStore inbox) →
+            the workspace-anchored Inbox. */}
+        <Route path="/notifications" element={<Navigate to="/inbox" replace />} />
+
+        {/* Inbox (workspace-anchored, Linear-style) */}
+        <Route path="/inbox" element={<AdoptStatic spec={{ kind: 'inbox', params: {} }} />} />
+
+        {/* Tracked (entity index) */}
+        <Route path="/tracked" element={<AdoptStatic spec={{ kind: 'tracked', params: {} }} />} />
+
+        {/* Workspaces */}
+        <Route path="/workspaces" element={<AdoptStatic spec={{ kind: 'workspace-list', params: {} }} />} />
+        {/* Template catalog routes must come before /workspaces/:wsId so the
+            static `templates` segment wins the match (it would otherwise
+            never collide — wsIds are UUIDs — but route specificity is the
+            defensive default). */}
+        <Route path="/workspaces/templates" element={<AdoptStatic spec={{ kind: 'template-catalog', params: {} }} />} />
+        <Route path="/workspaces/templates/:name" element={<AdoptTemplateDetail />} />
+        <Route path="/workspaces/:wsId/view/:path" element={<AdoptFileViewer />} />
+        <Route path="/workspaces/:wsId" element={<AdoptWorkspace />} />
+        <Route path="/workspaces/:wsId/s/:sessionId" element={<AdoptWorkspace />} />
 
         {/* Legacy redirects — preserved from sections.tsx */}
         <Route path="/logs" element={<Navigate to="/dev/logs" replace />} />
         <Route path="/events" element={<Navigate to="/dev/logs" replace />} />
         <Route path="/agent-status" element={<Navigate to="/dev/logs" replace />} />
-        <Route path="/heartbeat" element={<Navigate to="/automation/heartbeat" replace />} />
         <Route path="/scheduler" element={<Navigate to="/automation/cron" replace />} />
         <Route path="/ai-provider" element={<Navigate to="/settings/ai-provider" replace />} />
         <Route path="/trading" element={<Navigate to="/settings/trading" replace />} />
-        <Route path="/connectors" element={<Navigate to="/settings/connectors" replace />} />
+        <Route path="/trading-accounts" element={<Navigate to="/settings/trading" replace />} />
         <Route path="/market-data" element={<Navigate to="/settings/market-data" replace />} />
         <Route path="/news-collector" element={<Navigate to="/settings/news-collector" replace />} />
         <Route path="/data-sources" element={<Navigate to="/settings/market-data" replace />} />
         <Route path="/tools" element={<Navigate to="/settings" replace />} />
         <Route path="/uta/:id" element={<RedirectUtaDetail />} />
 
-        {/* Unknown URL → default chat */}
-        <Route path="*" element={<Navigate to="/chat" replace />} />
+        {/* Unknown URL → Inbox */}
+        <Route path="*" element={<Navigate to="/inbox" replace />} />
       </Routes>
       <UrlSync />
     </>
@@ -91,18 +118,14 @@ function AdoptStatic({ spec }: { spec: ViewSpec }) {
   return null
 }
 
-function AdoptChat() {
-  const { channelId = 'default' } = useParams<{ channelId?: string }>()
-  useAdopt({ kind: 'chat', params: { channelId } })
-  return null
-}
-
 function AdoptMarketDetail() {
   const { assetClass, symbol } = useParams<{ assetClass: string; symbol: string }>()
+  const [search] = useSearchParams()
   const valid: ReadonlyArray<string> = ['equity', 'crypto', 'currency', 'commodity']
   if (!assetClass || !symbol || !valid.includes(assetClass)) {
     return <Navigate to="/market" replace />
   }
+  const source = search.get('source') ?? undefined
   return (
     <AdoptStatic
       spec={{
@@ -110,7 +133,22 @@ function AdoptMarketDetail() {
         params: {
           assetClass: assetClass as Extract<ViewSpec, { kind: 'market-detail' }>['params']['assetClass'],
           symbol,
+          ...(source ? { source } : {}),
         },
+      }}
+    />
+  )
+}
+
+function AdoptMarketBoard() {
+  const { board } = useParams<{ board: string }>()
+  const valid: ReadonlyArray<string> = ['movers', 'calendar', 'macro', 'term-structure', 'global-macro', 'shipping', 'fed']
+  if (!board || !valid.includes(board)) return <Navigate to="/market" replace />
+  return (
+    <AdoptStatic
+      spec={{
+        kind: 'market-board',
+        params: { board: board as Extract<ViewSpec, { kind: 'market-board' }>['params']['board'] },
       }}
     />
   )
@@ -124,8 +162,8 @@ function AdoptUtaDetail() {
 
 function AdoptDev() {
   const { tab } = useParams<{ tab: string }>()
-  const valid: ReadonlyArray<string> = ['connectors', 'tools', 'sessions', 'snapshots', 'logs', 'simulator']
-  if (!tab || !valid.includes(tab)) return <Navigate to="/dev/connectors" replace />
+  const valid: ReadonlyArray<string> = ['tools', 'snapshots', 'logs', 'simulator']
+  if (!tab || !valid.includes(tab)) return <Navigate to="/dev/tools" replace />
   return (
     <AdoptStatic
       spec={{
@@ -138,7 +176,7 @@ function AdoptDev() {
 
 function AdoptAutomation() {
   const { section } = useParams<{ section: string }>()
-  const valid: ReadonlyArray<string> = ['flow', 'heartbeat', 'cron', 'webhook']
+  const valid: ReadonlyArray<string> = ['flow', 'cron', 'webhook']
   if (!section || !valid.includes(section)) return <Navigate to="/automation/flow" replace />
   return (
     <AdoptStatic
@@ -148,6 +186,28 @@ function AdoptAutomation() {
       }}
     />
   )
+}
+
+function AdoptWorkspace() {
+  const { wsId, sessionId } = useParams<{ wsId: string; sessionId?: string }>()
+  if (!wsId) return <Navigate to="/workspaces" replace />
+  const params: { wsId: string; sessionId?: string } = { wsId }
+  if (sessionId) params.sessionId = sessionId
+  return <AdoptStatic spec={{ kind: 'workspace', params }} />
+}
+
+function AdoptTemplateDetail() {
+  const { name } = useParams<{ name: string }>()
+  if (!name) return <Navigate to="/workspaces/templates" replace />
+  return <AdoptStatic spec={{ kind: 'template-detail', params: { name } }} />
+}
+
+function AdoptFileViewer() {
+  const { wsId, path } = useParams<{ wsId: string; path: string }>()
+  if (!wsId || !path) return <Navigate to="/workspaces" replace />
+  // `path` arrives already URL-decoded by react-router (toUrl encodes it as
+  // a single segment), so it may contain slashes — pass through verbatim.
+  return <AdoptStatic spec={{ kind: 'file-viewer', params: { wsId, path } }} />
 }
 
 function RedirectUtaDetail() {
@@ -168,14 +228,52 @@ function SetSidebarOnly({ section }: { section: import('./types').ActivitySectio
 }
 
 /**
+ * Map a ViewSpec to the ActivitySection whose sidebar should accompany
+ * it. URL adoption uses this so a fresh page load / deep link / browser
+ * back-forward lands on a screen with the matching sidebar already
+ * open — otherwise `selectedSidebar` stays at whatever was persisted
+ * (or null on first run), and the page renders without left context.
+ *
+ * `uta-detail` is intentionally Portfolio's sidebar: the URL lives
+ * under /settings/uta/:id for historical reasons but the page is a
+ * Portfolio drill-in (positions / equity for one account).
+ */
+function specToSection(spec: ViewSpec): ActivitySection {
+  switch (spec.kind) {
+    case 'inbox':              return 'inbox'
+    case 'tracked':            return 'tracked'
+    case 'chat-landing':       return 'chat'
+    case 'workspace':
+    case 'workspace-list':
+    case 'template-catalog':
+    case 'template-detail':
+    case 'file-viewer':        return 'workspaces'
+    case 'portfolio':
+    case 'uta-detail':         return 'portfolio'
+    case 'automation':         return 'automation'
+    case 'news':               return 'news'
+    case 'market-list':
+    case 'market-rotation':
+    case 'market-board':
+    case 'market-detail':      return 'market'
+    case 'settings':           return 'settings'
+    case 'dev':                return 'dev'
+  }
+}
+
+/**
  * Compare focused tab against `spec` and openOrFocus only if different —
- * skips redundant store updates on every render.
+ * skips redundant store updates on every render. Also activates the
+ * matching sidebar so URL-driven navigation (fresh load, deep link,
+ * back-forward) lands with the expected left-rail context, not blank.
  */
 function useAdopt(spec: ViewSpec) {
   const openOrFocus = useWorkspace((state) => state.openOrFocus)
+  const setSidebar = useWorkspace((state) => state.setSidebar)
   // Stable string key for dep tracking; spec is freshly built each render.
   const key = `${spec.kind}:${JSON.stringify(spec.params)}`
   useEffect(() => {
+    setSidebar(specToSection(spec))
     const state = useWorkspace.getState()
     const focused = state.tree.kind === 'leaf' && state.tree.group.activeTabId
       ? state.tabs[state.tree.group.activeTabId]

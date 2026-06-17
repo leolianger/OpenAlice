@@ -4,9 +4,28 @@ import {
   readUTAsConfig, writeUTAsConfig,
   utaConfigSchema, wipeUTATradingData,
 } from '../../core/config.js'
-import { createBroker } from '../../domain/trading/brokers/factory.js'
-import { BUILTIN_BROKER_PRESETS } from '../../domain/trading/brokers/presets.js'
-import { deriveUtaId, getBrokerPreset, mintInstanceId } from '../../domain/trading/brokers/preset-catalog.js'
+import {
+  BUILTIN_BROKER_PRESETS,
+  deriveUtaId,
+  getBrokerPreset,
+  mintInstanceId,
+} from '@traderalice/uta-protocol'
+import { triggerUTARestart } from '../../services/uta-supervisor/restart-trigger.js'
+
+/** Fire-and-forget UTA restart after a config mutation. Logs but doesn't
+ *  block the HTTP response — UI returns immediately and Guardian flips
+ *  the UTA process in the background. Subsequent `/api/trading/*` requests
+ *  will hit the new UTA via the BFF proxy. */
+function notifyUTAReload(): void {
+  triggerUTARestart()
+    .then((r) => {
+      if (!r.triggered) console.warn('[trading-config] UTA restart skipped:', r.error)
+      else if (!r.ready) console.warn('[trading-config] UTA did not come back:', r.error)
+    })
+    .catch((err) => {
+      console.warn('[trading-config] UTA restart failed:', err instanceof Error ? err.message : err)
+    })
+}
 
 // ==================== Credential helpers ====================
 
@@ -126,9 +145,12 @@ export function createTradingConfigRoutes(ctx: EngineContext) {
       const validated = utaConfigSchema.parse(candidate)
       accounts.push(validated)
       await writeUTAsConfig(accounts)
+      notifyUTAReload()
 
       ctx.utaManager.reconnectUTA(id).catch(() => {})
-      return c.json(validated, 201)
+      // Echo masked — plaintext credentials never leave the server, and the
+      // client's local state stays shape-identical to what GET / returns.
+      return c.json(maskSecrets({ ...validated }), 201)
     } catch (err) {
       if (err instanceof Error && err.name === 'ZodError') {
         return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)
@@ -166,6 +188,7 @@ export function createTradingConfigRoutes(ctx: EngineContext) {
       const idx = accounts.findIndex((a) => a.id === id)
       accounts[idx] = validated
       await writeUTAsConfig(accounts)
+      notifyUTAReload()
 
       // Handle enabled state changes at runtime
       const wasEnabled = existing.enabled !== false
@@ -180,7 +203,8 @@ export function createTradingConfigRoutes(ctx: EngineContext) {
         ctx.utaManager.reconnectUTA(id).catch(() => {})
       }
 
-      return c.json(validated)
+      // Echo masked — same reasoning as POST.
+      return c.json(maskSecrets({ ...validated }))
     } catch (err) {
       if (err instanceof Error && err.name === 'ZodError') {
         return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)
@@ -199,6 +223,7 @@ export function createTradingConfigRoutes(ctx: EngineContext) {
       }
       const filtered = accounts.filter((a) => a.id !== id)
       await writeUTAsConfig(filtered)
+      notifyUTAReload()
       // Close and deregister running account instance if any
       await ctx.utaManager.removeUTA(id)
       // Ephemeral UTAs also have their persistent trading state wiped — the
@@ -216,33 +241,25 @@ export function createTradingConfigRoutes(ctx: EngineContext) {
   })
 
   // ==================== Test Connection ====================
+  // BFF passthrough — the actual broker instantiation lives in UTA
+  // (it owns broker code). Alice forwards the wizard's payload over.
 
   app.post('/test-connection', async (c) => {
-    let broker: {
-      init: () => Promise<void>
-      getAccount: () => Promise<unknown>
-      getPositions: () => Promise<unknown>
-      close: () => Promise<void>
-    } | null = null
+    const utaUrl = process.env['OPENALICE_UTA_URL']
+    if (!utaUrl) {
+      return c.json({ success: false, error: 'UTA URL not set' }, 500)
+    }
     try {
       const body = await c.req.json()
-      const utaConfig = utaConfigSchema.parse({ ...body, id: body.id ?? '__test__' })
-
-      broker = createBroker(utaConfig)
-      await broker.init()
-      // Run both calls in parallel — getAccount proves auth, getPositions
-      // exercises the data path the user actually cares about (e.g. for OKX
-      // UTA, this is what surfaces spot holdings via fetchSpotHoldings).
-      const [account, positions] = await Promise.all([
-        broker.getAccount(),
-        broker.getPositions(),
-      ])
-      return c.json({ success: true, account, positions })
+      const res = await fetch(`${utaUrl.replace(/\/$/, '')}/api/trading/test-connection`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      return c.json(data, res.status as 200 | 400 | 500)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return c.json({ success: false, error: msg }, 400)
-    } finally {
-      try { await broker?.close() } catch { /* best effort */ }
+      return c.json({ success: false, error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
 

@@ -17,6 +17,10 @@ import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { ListenerRegistry } from '../../core/listener-registry.js'
 import type { ProducerHandle } from '../../core/producer.js'
+import { parseDuration } from '../../core/duration.js'
+import { dataPath } from '../../core/paths.js'
+
+export { parseDuration }
 
 // ==================== Types ====================
 
@@ -38,6 +42,15 @@ export interface CronJob {
   enabled: boolean
   schedule: CronSchedule
   payload: string
+  /**
+   * The workspace this job fires into. A cron job is "run this prompt in that
+   * workspace, headless". Optional only for backward-compat with pre-headless
+   * jobs (migration 0008 disables those); a job that fires without a
+   * workspaceId is a loud no-op in the listener.
+   */
+  workspaceId?: string
+  /** Which enabled CLI adapter to run — claude / codex / pi / opencode. */
+  agent?: string
   state: CronJobState
   createdAt: number
 }
@@ -46,6 +59,9 @@ export interface CronFirePayload {
   jobId: string
   jobName: string
   payload: string
+  /** Dispatch target — threaded through so the listener needn't re-read the store. */
+  workspaceId?: string
+  agent?: string
 }
 
 // ==================== CRUD Types ====================
@@ -55,6 +71,8 @@ export interface CronJobCreate {
   schedule: CronSchedule
   payload: string
   enabled?: boolean
+  workspaceId?: string
+  agent?: string
 }
 
 export interface CronJobPatch {
@@ -62,6 +80,8 @@ export interface CronJobPatch {
   schedule?: CronSchedule
   payload?: string
   enabled?: boolean
+  workspaceId?: string
+  agent?: string
 }
 
 // ==================== Engine Interface ====================
@@ -96,7 +116,7 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
     name: PRODUCER_NAME,
     emits: CRON_EMITS,
   })
-  const storePath = opts.storePath ?? 'data/cron/jobs.json'
+  const storePath = opts.storePath ?? dataPath('cron', 'jobs.json')
   const now = opts.now ?? Date.now
 
   let jobs: CronJob[] = []
@@ -174,6 +194,8 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
         jobId: job.id,
         jobName: job.name,
         payload: job.payload,
+        ...(job.workspaceId !== undefined ? { workspaceId: job.workspaceId } : {}),
+        ...(job.agent !== undefined ? { agent: job.agent } : {}),
       } satisfies CronFirePayload)
 
       job.state.lastStatus = 'ok'
@@ -232,6 +254,8 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
         enabled: params.enabled ?? true,
         schedule: params.schedule,
         payload: params.payload,
+        ...(params.workspaceId !== undefined ? { workspaceId: params.workspaceId } : {}),
+        ...(params.agent !== undefined ? { agent: params.agent } : {}),
         state: {
           nextRunAtMs: computeNextRun(params.schedule, currentMs),
           lastRunAtMs: null,
@@ -258,6 +282,8 @@ export function createCronEngine(opts: CronEngineOpts): CronEngine {
       if (patch.name !== undefined) job.name = patch.name
       if (patch.payload !== undefined) job.payload = patch.payload
       if (patch.enabled !== undefined) job.enabled = patch.enabled
+      if (patch.workspaceId !== undefined) job.workspaceId = patch.workspaceId
+      if (patch.agent !== undefined) job.agent = patch.agent
 
       if (patch.schedule !== undefined) {
         job.schedule = patch.schedule
@@ -309,17 +335,6 @@ export function computeNextRun(schedule: CronSchedule, afterMs: number): number 
     case 'cron':
       return nextCronFire(schedule.cron, afterMs)
   }
-}
-
-export function parseDuration(s: string): number | null {
-  const re = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/
-  const m = re.exec(s.trim())
-  if (!m) return null
-  const h = Number(m[1] ?? 0)
-  const min = Number(m[2] ?? 0)
-  const sec = Number(m[3] ?? 0)
-  if (h === 0 && min === 0 && sec === 0) return null
-  return (h * 3600 + min * 60 + sec) * 1000
 }
 
 /**

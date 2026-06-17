@@ -1,13 +1,16 @@
-/** Shared formatters for the Market workbench. Kept tiny — no i18n / locale picking. */
+/** Shared formatters for the Market workbench. Grouping/decimal rendering
+ *  follows the app locale via `getIntlLocale()` (en-US until the locale store
+ *  sets otherwise). */
+import { getIntlLocale } from '../../lib/intl'
 
 export function fmtNumber(n: unknown, digits = 2): string {
   if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return '—'
-  return n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+  return n.toLocaleString(getIntlLocale(), { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 
 export function fmtInt(n: unknown): string {
   if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return '—'
-  return Math.round(n).toLocaleString('en-US')
+  return Math.round(n).toLocaleString(getIntlLocale())
 }
 
 /** Scale large absolute values to B / M / K with one decimal. */

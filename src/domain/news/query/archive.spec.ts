@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { globNews, grepNews, readNews, type NewsToolContext } from './archive'
+import { globRss, grepRss, readRss, type NewsToolContext } from './archive'
 import type { NewsItem } from '../types'
 
 describe('news tools (pure functions)', () => {
   // Mock news data
+  // Non-sequential ids on purpose: proves addressing is by stable id, not
+  // by position in the returned list.
   const mockNews: NewsItem[] = [
     {
+      id: 10,
       time: new Date('2025-01-01T08:00:00Z'),
       title: 'BTC breaks 50k resistance',
       content:
@@ -13,6 +16,7 @@ describe('news tools (pure functions)', () => {
       metadata: { source: 'official', category: 'crypto' },
     },
     {
+      id: 20,
       time: new Date('2025-01-01T10:00:00Z'),
       title: 'ETH upgrade announcement',
       content:
@@ -20,6 +24,7 @@ describe('news tools (pure functions)', () => {
       metadata: { source: 'official', category: 'crypto' },
     },
     {
+      id: 30,
       time: new Date('2025-01-01T12:00:00Z'),
       title: 'Market analysis report',
       content:
@@ -27,6 +32,7 @@ describe('news tools (pure functions)', () => {
       metadata: { source: 'analyst', category: 'analysis' },
     },
     {
+      id: 40,
       time: new Date('2025-01-02T06:00:00Z'),
       title: '', // Empty title - simulates untitled news
       content:
@@ -39,24 +45,24 @@ describe('news tools (pure functions)', () => {
     getNews: async () => news,
   })
 
-  describe('globNews', () => {
+  describe('globRss', () => {
     it('should find news by title pattern', async () => {
-      const results = await globNews(createContext(), { pattern: 'BTC' })
+      const results = await globRss(createContext(), { pattern: 'BTC' })
 
       expect(results).toHaveLength(1)
-      expect(results[0].index).toBe(0)
+      expect(results[0].id).toBe(10)
       expect(results[0].title).toBe('BTC breaks 50k resistance')
     })
 
     it('should be case insensitive', async () => {
-      const results = await globNews(createContext(), { pattern: 'btc' })
+      const results = await globRss(createContext(), { pattern: 'btc' })
 
       expect(results).toHaveLength(1)
       expect(results[0].title).toBe('BTC breaks 50k resistance')
     })
 
     it('should support regex patterns', async () => {
-      const results = await globNews(createContext(), {
+      const results = await globRss(createContext(), {
         pattern: 'BTC|ETH',
       })
 
@@ -66,13 +72,13 @@ describe('news tools (pure functions)', () => {
     })
 
     it('should return empty array when no matches', async () => {
-      const results = await globNews(createContext(), { pattern: 'DOGE' })
+      const results = await globRss(createContext(), { pattern: 'DOGE' })
 
       expect(results).toHaveLength(0)
     })
 
     it('should filter by metadata', async () => {
-      const results = await globNews(createContext(), {
+      const results = await globRss(createContext(), {
         pattern: '.*',
         metadataFilter: { source: 'official' },
       })
@@ -82,7 +88,7 @@ describe('news tools (pure functions)', () => {
     })
 
     it('should respect limit', async () => {
-      const results = await globNews(createContext(), {
+      const results = await globRss(createContext(), {
         pattern: '.*',
         limit: 2,
       })
@@ -91,7 +97,7 @@ describe('news tools (pure functions)', () => {
     })
 
     it('should include content length', async () => {
-      const results = await globNews(createContext(), { pattern: 'BTC' })
+      const results = await globRss(createContext(), { pattern: 'BTC' })
 
       expect(results[0].contentLength).toBe(mockNews[0].content.length)
     })
@@ -99,6 +105,7 @@ describe('news tools (pure functions)', () => {
     it('should truncate long metadata', async () => {
       const newsWithLongMetadata: NewsItem[] = [
         {
+          id: 1,
           time: new Date(),
           title: 'Test',
           content: 'Content',
@@ -109,7 +116,7 @@ describe('news tools (pure functions)', () => {
         },
       ]
 
-      const results = await globNews(createContext(newsWithLongMetadata), {
+      const results = await globRss(createContext(newsWithLongMetadata), {
         pattern: '.*',
       })
 
@@ -118,38 +125,38 @@ describe('news tools (pure functions)', () => {
     })
 
     it('should handle empty title (untitled news)', async () => {
-      const results = await globNews(createContext(), { pattern: '.*' })
+      const results = await globRss(createContext(), { pattern: '.*' })
 
       // Empty title should match '.*' pattern
       expect(results).toHaveLength(4)
     })
   })
 
-  describe('grepNews', () => {
+  describe('grepRss', () => {
     it('should search in content', async () => {
-      const results = await grepNews(createContext(), {
+      const results = await grepRss(createContext(), {
         pattern: 'interest rate',
       })
 
       expect(results).toHaveLength(1)
-      expect(results[0].index).toBe(2)
+      expect(results[0].id).toBe(30)
       expect(results[0].matchedText).toContain('Interest rate')
     })
 
     it('should search in both title and content', async () => {
-      const results = await grepNews(createContext(), { pattern: 'Bitcoin' })
+      const results = await grepRss(createContext(), { pattern: 'Bitcoin' })
 
       expect(results).toHaveLength(2)
     })
 
     it('should be case insensitive', async () => {
-      const results = await grepNews(createContext(), { pattern: 'BITCOIN' })
+      const results = await grepRss(createContext(), { pattern: 'BITCOIN' })
 
       expect(results).toHaveLength(2)
     })
 
     it('should include context around match', async () => {
-      const results = await grepNews(createContext(), {
+      const results = await grepRss(createContext(), {
         pattern: 'broken',
         contextChars: 20,
       })
@@ -161,7 +168,7 @@ describe('news tools (pure functions)', () => {
     })
 
     it('should add ellipsis when context is truncated', async () => {
-      const results = await grepNews(createContext(), {
+      const results = await grepRss(createContext(), {
         pattern: 'resistance',
         contextChars: 10,
       })
@@ -170,17 +177,17 @@ describe('news tools (pure functions)', () => {
     })
 
     it('should filter by metadata', async () => {
-      const results = await grepNews(createContext(), {
+      const results = await grepRss(createContext(), {
         pattern: '.*',
         metadataFilter: { category: 'analysis' },
       })
 
       expect(results).toHaveLength(1)
-      expect(results[0].index).toBe(2)
+      expect(results[0].id).toBe(30)
     })
 
     it('should respect limit', async () => {
-      const results = await grepNews(createContext(), {
+      const results = await grepRss(createContext(), {
         pattern: '.*',
         limit: 1,
       })
@@ -189,44 +196,47 @@ describe('news tools (pure functions)', () => {
     })
 
     it('should find matches in untitled news content', async () => {
-      const results = await grepNews(createContext(), { pattern: 'Korea' })
+      const results = await grepRss(createContext(), { pattern: 'Korea' })
 
       expect(results).toHaveLength(1)
-      expect(results[0].index).toBe(3)
+      expect(results[0].id).toBe(40)
       expect(results[0].title).toBe('')
     })
 
     it('should use default contextChars of 50', async () => {
-      const results = await grepNews(createContext(), { pattern: 'BTC' })
+      const results = await grepRss(createContext(), { pattern: 'BTC' })
 
       // matchedText should have content around the match
       expect(results[0].matchedText.length).toBeGreaterThan(3)
     })
   })
 
-  describe('readNews', () => {
-    it('should read news by index', async () => {
-      const result = await readNews(createContext(), { index: 1 })
+  describe('readRss', () => {
+    it('should read news by stable id', async () => {
+      const result = await readRss(createContext(), { id: 20 })
 
       expect(result).not.toBeNull()
       expect(result!.title).toBe('ETH upgrade announcement')
       expect(result!.content).toContain('Ethereum')
     })
 
-    it('should return null for invalid index', async () => {
-      const result = await readNews(createContext(), { index: 100 })
+    it('should resolve by id regardless of position in the list', async () => {
+      // id 40 is the last item; a positional index of 40 would be out of range,
+      // proving addressing is by id, not by position.
+      const result = await readRss(createContext(), { id: 40 })
 
-      expect(result).toBeNull()
+      expect(result).not.toBeNull()
+      expect(result!.content).toContain('Korea')
     })
 
-    it('should return null for negative index', async () => {
-      const result = await readNews(createContext(), { index: -1 })
+    it('should return null for unknown id', async () => {
+      const result = await readRss(createContext(), { id: 99999 })
 
       expect(result).toBeNull()
     })
 
     it('should return full news item with all fields', async () => {
-      const result = await readNews(createContext(), { index: 0 })
+      const result = await readRss(createContext(), { id: 10 })
 
       expect(result).toEqual(mockNews[0])
       expect(result!.time).toBeInstanceOf(Date)
@@ -237,25 +247,25 @@ describe('news tools (pure functions)', () => {
   describe('empty news list', () => {
     const emptyContext = createContext([])
 
-    it('globNews should return empty array', async () => {
-      const results = await globNews(emptyContext, { pattern: '.*' })
+    it('globRss should return empty array', async () => {
+      const results = await globRss(emptyContext, { pattern: '.*' })
       expect(results).toHaveLength(0)
     })
 
-    it('grepNews should return empty array', async () => {
-      const results = await grepNews(emptyContext, { pattern: '.*' })
+    it('grepRss should return empty array', async () => {
+      const results = await grepRss(emptyContext, { pattern: '.*' })
       expect(results).toHaveLength(0)
     })
 
-    it('readNews should return null', async () => {
-      const result = await readNews(emptyContext, { index: 0 })
+    it('readRss should return null', async () => {
+      const result = await readRss(emptyContext, { id: 0 })
       expect(result).toBeNull()
     })
   })
 
   describe('metadata filter edge cases', () => {
     it('should match multiple metadata keys', async () => {
-      const results = await globNews(createContext(), {
+      const results = await globRss(createContext(), {
         pattern: '.*',
         metadataFilter: { source: 'official', category: 'crypto' },
       })
@@ -264,7 +274,7 @@ describe('news tools (pure functions)', () => {
     })
 
     it('should not match if any key is missing', async () => {
-      const results = await globNews(createContext(), {
+      const results = await globRss(createContext(), {
         pattern: '.*',
         metadataFilter: { source: 'official', nonexistent: 'value' },
       })
@@ -273,7 +283,7 @@ describe('news tools (pure functions)', () => {
     })
 
     it('should handle empty metadata filter', async () => {
-      const results = await globNews(createContext(), {
+      const results = await globRss(createContext(), {
         pattern: 'BTC',
         metadataFilter: {},
       })

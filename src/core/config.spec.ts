@@ -13,12 +13,24 @@ vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
   mkdir: vi.fn().mockResolvedValue(undefined),
   unlink: vi.fn().mockResolvedValue(undefined),
+  rm: vi.fn().mockResolvedValue(undefined),
+  rename: vi.fn().mockResolvedValue(undefined),
+  chmod: vi.fn().mockResolvedValue(undefined),
+}))
+
+// Identity-mock the sealing layer: it's unit-tested in sealing.spec.ts (and
+// round-tripped against real disk in config-accounts.spec.ts). Identity keeps
+// this file's on-disk JSON assertions readable, and spares the mocked
+// fs/promises from having to simulate the key file.
+vi.mock('./sealing.js', () => ({
+  isSealedEnvelope: () => false,
+  seal: async (v: unknown) => v,
+  unseal: async (v: unknown) => v,
 }))
 
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import {
   readAIProviderConfig,
-  setActiveProfile,
   readToolsConfig,
   readAgentConfig,
   readMarketDataConfig,
@@ -26,7 +38,9 @@ import {
   readUTAsConfig,
   writeUTAsConfig,
   aiProviderSchema,
-  profileSchema,
+  resolveCredential,
+  deleteCredential,
+  credentialSchema,
 } from './config.js'
 
 const mockReadFile = vi.mocked(readFile)
@@ -59,58 +73,34 @@ beforeEach(() => {
 // ==================== readAIProviderConfig ====================
 
 describe('readAIProviderConfig', () => {
-  it('returns schema defaults when file is missing', async () => {
+  it('returns schema defaults (empty vault) when file is missing', async () => {
     fileNotFound()
     const cfg = await readAIProviderConfig()
-    expect(cfg.activeProfile).toBe('default')
-    expect(cfg.profiles.default).toBeDefined()
-    expect(cfg.profiles.default.backend).toBe('agent-sdk')
+    expect(cfg.credentials).toEqual({})
+    expect(cfg.apiKeys).toEqual({})
   })
 
-  it('parses valid profile-based content', async () => {
+  it('parses a credential vault', async () => {
     fileReturns({
       apiKeys: { openai: 'sk-test' },
-      profiles: { main: { backend: 'codex', label: 'GPT', model: 'gpt-5.4', loginMethod: 'codex-oauth' } },
-      activeProfile: 'main',
+      credentials: { 'glm-1': { vendor: 'glm', authType: 'api-key', apiKey: 'k', wires: { anthropic: 'https://open.bigmodel.cn/api/anthropic' } } },
     })
     const cfg = await readAIProviderConfig()
-    expect(cfg.activeProfile).toBe('main')
-    expect(cfg.profiles.main.backend).toBe('codex')
-    expect(cfg.profiles.main.model).toBe('gpt-5.4')
+    expect(cfg.credentials['glm-1'].vendor).toBe('glm')
+    expect(cfg.apiKeys.openai).toBe('sk-test')
   })
 
   it('returns defaults when file contains invalid JSON (parse error)', async () => {
     fileReadError('Unexpected token')
     const cfg = await readAIProviderConfig()
-    expect(cfg.activeProfile).toBe('default')
-  })
-})
-
-// ==================== setActiveProfile ====================
-
-describe('setActiveProfile', () => {
-  it('updates activeProfile and writes to disk', async () => {
-    const config = {
-      apiKeys: {},
-      profiles: {
-        a: { backend: 'agent-sdk', label: 'A', model: 'claude-sonnet-4-6', loginMethod: 'api-key' },
-        b: { backend: 'codex', label: 'B', model: 'gpt-5.4', loginMethod: 'codex-oauth' },
-      },
-      activeProfile: 'a',
-    }
-    fileReturns(config)
-
-    await setActiveProfile('b')
-
-    expect(mockWriteFile).toHaveBeenCalled()
-    const written = JSON.parse((mockWriteFile.mock.calls[0][1] as string))
-    expect(written.activeProfile).toBe('b')
-    expect(written.profiles.a).toBeDefined() // preserved
+    expect(cfg.credentials).toEqual({})
   })
 
-  it('throws on unknown profile slug', async () => {
-    fileReturns({ apiKeys: {}, profiles: { a: { backend: 'agent-sdk', label: 'A', model: 'x' } }, activeProfile: 'a' })
-    await expect(setActiveProfile('nonexistent')).rejects.toThrow('Unknown profile')
+  it('ignores legacy profiles/activeProfile fields (stripped by the schema)', async () => {
+    fileReturns({ profiles: { default: { backend: 'agent-sdk' } }, activeProfile: 'default', credentials: {} })
+    const cfg = await readAIProviderConfig()
+    expect('profiles' in cfg).toBe(false)
+    expect('activeProfile' in cfg).toBe(false)
   })
 })
 
@@ -160,7 +150,7 @@ describe('readMarketDataConfig', () => {
     fileNotFound()
     const cfg = await readMarketDataConfig()
     expect(cfg.enabled).toBe(true)
-    expect(cfg.backend).toBe('typebb-sdk')
+    expect(cfg.hub).toEqual({ enabled: true, baseUrl: 'https://traderhub.openalice.ai' })
   })
 
   it('parses enabled flag from file', async () => {
@@ -192,7 +182,7 @@ describe('writeConfigSection', () => {
 
   it('throws ZodError for invalid data (does not write file)', async () => {
     await expect(
-      writeConfigSection('aiProvider', { profiles: { bad: { backend: 'invalid-backend', label: 'X' } } })
+      writeConfigSection('aiProvider', { credentials: { bad: { vendor: 'not-a-vendor', authType: 'api-key' } } })
     ).rejects.toThrow()
     // writeFile should not have been called
     expect(mockWriteFile).not.toHaveBeenCalled()
@@ -272,6 +262,7 @@ describe('writeUTAsConfig', () => {
     await writeUTAsConfig([{
       id: 'acc-1', presetId: 'alpaca', enabled: true, guards: [],
       presetConfig: { mode: 'paper', apiKey: 'k', apiSecret: 's' },
+      keyless: false, readOnly: false, editable: true,
     }])
     const filePath = mockWriteFile.mock.calls[0][0] as string
     expect(filePath).toMatch(/accounts\.json$/)
@@ -287,40 +278,90 @@ describe('writeUTAsConfig', () => {
 
 // ==================== aiProviderSchema (Zod schema validation) ====================
 
-describe('aiProviderSchema (profile-based)', () => {
-  it('uses defaults for empty object', () => {
+describe('aiProviderSchema (credential vault)', () => {
+  it('uses defaults for empty object (empty vault)', () => {
     const result = aiProviderSchema.parse({})
-    expect(result.activeProfile).toBe('default')
-    expect(result.profiles.default).toBeDefined()
+    expect(result.credentials).toEqual({})
     expect(result.apiKeys).toEqual({})
   })
 
-  it('accepts valid profile-based config', () => {
+  it('accepts a credentials map', () => {
     expect(() => aiProviderSchema.parse({
-      profiles: { test: { backend: 'codex', label: 'Test', model: 'gpt-5.4', loginMethod: 'codex-oauth' } },
-      activeProfile: 'test',
+      credentials: { 'openai-1': { vendor: 'openai', authType: 'api-key', apiKey: 'sk' } },
     })).not.toThrow()
   })
 })
 
-describe('profileSchema', () => {
-  it('validates agent-sdk profile', () => {
-    const result = profileSchema.parse({ backend: 'agent-sdk', label: 'Claude', model: 'claude-opus-4-6', loginMethod: 'claudeai' })
-    expect(result.backend).toBe('agent-sdk')
+// ==================== credentialSchema ====================
+
+describe('credentialSchema', () => {
+  it('validates api-key credential', () => {
+    const result = credentialSchema.parse({ vendor: 'anthropic', authType: 'api-key', apiKey: 'sk-x' })
+    expect(result.vendor).toBe('anthropic')
+    expect(result.authType).toBe('api-key')
   })
 
-  it('validates codex profile', () => {
-    const result = profileSchema.parse({ backend: 'codex', label: 'GPT', model: 'gpt-5.4' })
-    expect(result.backend).toBe('codex')
-    if (result.backend === 'codex') expect(result.loginMethod).toBe('codex-oauth') // default
+  it('validates subscription credential without apiKey', () => {
+    const result = credentialSchema.parse({ vendor: 'anthropic', authType: 'subscription' })
+    expect(result.apiKey).toBeUndefined()
   })
 
-  it('validates vercel profile', () => {
-    const result = profileSchema.parse({ backend: 'vercel-ai-sdk', label: 'Gemini', provider: 'google', model: 'gemini-2.5-flash' })
-    expect(result.backend).toBe('vercel-ai-sdk')
+  it('rejects unknown vendor', () => {
+    expect(() => credentialSchema.parse({ vendor: 'fake', authType: 'api-key' })).toThrow()
   })
 
-  it('rejects unknown backend', () => {
-    expect(() => profileSchema.parse({ backend: 'unknown', label: 'X', model: 'y' })).toThrow()
+  it('normalizes empty / whitespace baseUrl to undefined (dedup invariant)', () => {
+    // The dedup predicate compares baseUrl with ===, so '' must collapse to
+    // undefined or a default-endpoint cred would duplicate. See
+    // feedback_optional_empty_string.
+    expect(credentialSchema.parse({ vendor: 'glm', authType: 'api-key', apiKey: 'k', baseUrl: '' }).baseUrl).toBeUndefined()
+    expect(credentialSchema.parse({ vendor: 'glm', authType: 'api-key', apiKey: 'k', baseUrl: '   ' }).baseUrl).toBeUndefined()
+  })
+
+  it('trims and keeps a real baseUrl (region stays distinct)', () => {
+    expect(credentialSchema.parse({ vendor: 'glm', authType: 'api-key', apiKey: 'k', baseUrl: '  https://api.z.ai/api/anthropic ' }).baseUrl)
+      .toBe('https://api.z.ai/api/anthropic')
+  })
+
+  it('persists wireShape (disambiguates same-baseUrl shapes, e.g. OpenAI chat vs responses)', () => {
+    expect(credentialSchema.parse({ vendor: 'openai', authType: 'api-key', apiKey: 'k', wireShape: 'openai-responses' }).wireShape)
+      .toBe('openai-responses')
+    expect(credentialSchema.parse({ vendor: 'anthropic', authType: 'api-key', apiKey: 'k' }).wireShape).toBeUndefined()
+    expect(() => credentialSchema.parse({ vendor: 'openai', authType: 'api-key', apiKey: 'k', wireShape: 'bogus' })).toThrow()
   })
 })
+
+// ==================== resolveCredential / deleteCredential ====================
+
+describe('resolveCredential', () => {
+  it('returns the credential by slug', async () => {
+    fileReturns({
+      credentials: { 'openai-1': { vendor: 'openai', authType: 'api-key', apiKey: 'sk-oa' } },
+      profiles: { default: { backend: 'agent-sdk', model: 'm', loginMethod: 'claudeai' } },
+      activeProfile: 'default',
+    })
+    const c = await resolveCredential('openai-1')
+    expect(c.vendor).toBe('openai')
+    expect(c.apiKey).toBe('sk-oa')
+  })
+
+  it('throws when slug is unknown', async () => {
+    fileReturns({
+      credentials: {},
+      profiles: { default: { backend: 'agent-sdk', model: 'm', loginMethod: 'claudeai' } },
+      activeProfile: 'default',
+    })
+    await expect(resolveCredential('nope')).rejects.toThrow(/Unknown credential/)
+  })
+})
+
+describe('deleteCredential', () => {
+  it('removes the credential from the vault', async () => {
+    fileReturns({
+      credentials: { 'orphan-1': { vendor: 'openai', authType: 'api-key', apiKey: 'k' } },
+    })
+    await expect(deleteCredential('orphan-1')).resolves.toBeUndefined()
+    expect(mockWriteFile).toHaveBeenCalled()
+  })
+})
+
